@@ -1,9 +1,17 @@
-"""Bugly结果适配器 — API → 统一TestResult格式"""
+"""Bugly adapter — INTENTIONALLY GATED.
+
+Gate: BUGLY_ANDROID_APP_ID + BUGLY_ANDROID_APP_KEY environment variables.
+Without credentials, collect() returns [] (empty results, no error).
+This is by design — see aggregator/preflight.py for the credential check.
+"""
 
 
 def collect(project_config: dict = None) -> list[dict]:
-    """从Bugly API收集崩溃数据"""
-    # Bugly API集成需要有效的App ID/Key
+    """从Bugly API收集崩溃数据.
+
+    需要有效的 Bugly App ID/Key 才能调用 API。
+    凭证未配置时返回空列表，由 preflight 标记为 blocked 而非 error。
+    """
     return []
 
 

@@ -43,4 +43,4 @@ mcp__codegraph__codegraph_files(path="src/ai_workflow_hub/nodes/")
 
 ## Project Root
 
-All codegraph queries use: `project_root="D:\devFrame\ai-workflow-hub"`
+All codegraph queries use: `project_root="D:\dev-frame-opencode\ai-workflow-hub"`

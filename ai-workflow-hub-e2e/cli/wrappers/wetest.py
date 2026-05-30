@@ -1,4 +1,10 @@
-"""WeTest wrapper — 通过API上传APK并触发云真机兼容性测试"""
+"""WeTest wrapper — INTENTIONALLY GATED.
+
+通过 API 上传 APK 并触发云真机兼容性测试。
+需要 WeTest 账户验证 API (WETEST_API_KEY / WETEST_API_SECRET)。
+凭证未配置时返回 skipped=True，由 preflight 阻断。
+API 集成细节（上传/创建任务/轮询）待验证 WeTest 账户环境后启用。
+"""
 
 import requests
 import time

@@ -16,7 +16,7 @@ type: reference
 # 步骤 1：改代码前先查上下文
 mcp__codegraph__codegraph_context(
     task="what does <module> do and who calls it",
-    project_root="D:\devFrame\ai-workflow-hub"
+    project_root="D:\dev-frame-opencode\ai-workflow-hub"
 )
 
 # 步骤 2：如需查调用链

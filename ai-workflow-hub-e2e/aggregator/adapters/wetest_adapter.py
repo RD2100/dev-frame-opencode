@@ -1,10 +1,17 @@
-"""WeTest结果适配器 — API → 统一TestResult格式"""
+"""WeTest adapter — INTENTIONALLY GATED.
+
+Gate: WETEST_API_KEY + WETEST_API_SECRET environment variables.
+Without credentials, collect() returns [] (empty results, no error).
+This is by design — see aggregator/preflight.py for the credential check.
+"""
 
 
 def collect(project_config: dict = None) -> list[dict]:
-    """从WeTest API收集兼容性测试结果"""
-    # WeTest API集成需要有效的API Key环境
-    # 返回空列表直到环境就绪
+    """从WeTest API收集兼容性测试结果.
+
+    需要有效的 WeTest API Key/Secret 才能调用 API。
+    凭证未配置时返回空列表，由 preflight 标记为 blocked 而非 error。
+    """
     return []
 
 

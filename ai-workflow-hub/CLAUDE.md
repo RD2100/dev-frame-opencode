@@ -17,7 +17,7 @@ Grep is only allowed for:
 - Finding literal strings/error messages (not code symbols)
 
 Skill: `/codebase-search`
-Project root: `D:\devFrame\ai-workflow-hub`
+Project root: `D:\dev-frame-opencode\ai-workflow-hub`
 Hook: settings.json postToolUse will warn on every Grep(*.py) call
 
 Before non-trivial work, read `docs/agent-onboarding.md` and relevant `memory/` cards.
