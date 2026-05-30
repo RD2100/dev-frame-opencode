@@ -3452,3 +3452,639 @@ tasks:
   lease_until: ''
   created_at: '2026-05-28T16:33:53.550446+00:00'
   updated_at: '2026-05-28T16:33:53.550446+00:00'
+- id: task-60642502
+  project_id: test-proj
+  title: flaky batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: flaky batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:34:15.281089+00:00'
+  updated_at: '2026-05-30T16:34:15.281089+00:00'
+- id: task-d4d035ff
+  project_id: test-proj
+  title: always fails
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: always fails
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:34:15.534656+00:00'
+  updated_at: '2026-05-30T16:34:15.534656+00:00'
+- id: task-966a86a4
+  project_id: test-proj
+  title: fails once
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fails once
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:34:15.793968+00:00'
+  updated_at: '2026-05-30T16:34:15.793968+00:00'
+- id: task-5285d13b
+  project_id: test-proj
+  title: evidence gap
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: evidence gap
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:34:16.075692+00:00'
+  updated_at: '2026-05-30T16:34:16.075692+00:00'
+- id: task-989048d8
+  project_id: test-proj
+  title: guard-test
+  description: verify terminal guard
+  risk: medium
+  status: passed
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-1
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:34:16.620268+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:34:16.334267+00:00'
+  updated_at: '2026-05-30T16:34:16.887165+00:00'
+- id: task-19d8c013
+  project_id: test-proj
+  title: idempotent-test
+  description: already running
+  risk: medium
+  status: running
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-a
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:34:17.780264+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:34:17.496754+00:00'
+  updated_at: '2026-05-30T16:34:17.780264+00:00'
+- id: task-3e131d43
+  project_id: test-proj
+  title: fresh batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fresh batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:34:18.476278+00:00'
+  updated_at: '2026-05-30T16:34:18.476278+00:00'
+- id: task-9be67c54
+  project_id: test-proj
+  title: flaky batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: flaky batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:35:47.279886+00:00'
+  updated_at: '2026-05-30T16:35:47.279886+00:00'
+- id: task-bef2986b
+  project_id: test-proj
+  title: always fails
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: always fails
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:35:47.525448+00:00'
+  updated_at: '2026-05-30T16:35:47.525448+00:00'
+- id: task-4da1dbe2
+  project_id: test-proj
+  title: fails once
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fails once
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:35:47.815157+00:00'
+  updated_at: '2026-05-30T16:35:47.815157+00:00'
+- id: task-5ac4e2d9
+  project_id: test-proj
+  title: evidence gap
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: evidence gap
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:35:48.065729+00:00'
+  updated_at: '2026-05-30T16:35:48.065729+00:00'
+- id: task-601abdc2
+  project_id: test-proj
+  title: guard-test
+  description: verify terminal guard
+  risk: medium
+  status: passed
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-1
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:35:48.606953+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:35:48.356952+00:00'
+  updated_at: '2026-05-30T16:35:48.894621+00:00'
+- id: task-c9d89a0e
+  project_id: test-proj
+  title: idempotent-test
+  description: already running
+  risk: medium
+  status: running
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-a
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:35:49.739321+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:35:49.480706+00:00'
+  updated_at: '2026-05-30T16:35:49.739321+00:00'
+- id: task-673163b2
+  project_id: test-proj
+  title: fresh batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fresh batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:35:51.326944+00:00'
+  updated_at: '2026-05-30T16:35:51.326944+00:00'
+- id: task-1183fa5d
+  project_id: test-proj
+  title: flaky batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: flaky batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:36:17.408901+00:00'
+  updated_at: '2026-05-30T16:36:17.408901+00:00'
+- id: task-d2e13879
+  project_id: test-proj
+  title: always fails
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: always fails
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:36:17.676477+00:00'
+  updated_at: '2026-05-30T16:36:17.676477+00:00'
+- id: task-7708d4e1
+  project_id: test-proj
+  title: fails once
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fails once
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:36:17.981476+00:00'
+  updated_at: '2026-05-30T16:36:17.981476+00:00'
+- id: task-7af374fa
+  project_id: test-proj
+  title: evidence gap
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: evidence gap
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:36:18.260459+00:00'
+  updated_at: '2026-05-30T16:36:18.260459+00:00'
+- id: task-94d489a1
+  project_id: test-proj
+  title: guard-test
+  description: verify terminal guard
+  risk: medium
+  status: passed
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-1
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:36:18.838857+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:36:18.569061+00:00'
+  updated_at: '2026-05-30T16:36:19.111404+00:00'
+- id: task-9cdce27d
+  project_id: test-proj
+  title: idempotent-test
+  description: already running
+  risk: medium
+  status: running
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: run-a
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: '2026-05-30T16:36:20.048442+00:00'
+  lease_until: ''
+  created_at: '2026-05-30T16:36:19.772631+00:00'
+  updated_at: '2026-05-30T16:36:20.048442+00:00'
+- id: task-1f96a1dc
+  project_id: test-proj
+  title: fresh batch
+  description: '## Batch: b1
+
+    Risk domain:  | Risk: low
+
+    Goal: fresh batch
+
+
+    ### Tasks to complete (same risk domain, execute together):
+
+
+    ### ALLOWED FILES (do NOT touch anything else):
+
+    - `a.py`
+
+
+    ### FORBIDDEN:
+
+
+    ### Acceptance gates:
+
+    '
+  risk: low
+  status: queued
+  priority: normal
+  dependencies: []
+  coding_backend: ''
+  last_run_id: ''
+  retry_count: 0
+  blocked_reason: ''
+  last_started_at: ''
+  lease_until: ''
+  created_at: '2026-05-30T16:36:20.803081+00:00'
+  updated_at: '2026-05-30T16:36:20.803081+00:00'

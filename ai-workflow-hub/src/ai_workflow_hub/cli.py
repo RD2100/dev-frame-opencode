@@ -1058,8 +1058,8 @@ def backend_stress(
             console.print(f"[red]ERROR: {e}[/red]")
 
         import shutil as _shutil
-        test_repo = os.environ.get("AIHUB_TEST_REPO", "D:/devFrame/ai-workflow-hub-test-repo")
-        worktrees = os.environ.get("AIHUB_WORKTREES", "/d/devFrame/aihub-worktrees")
+        test_repo = os.environ.get("AIHUB_TEST_REPO", str(Path(__file__).resolve().parent.parent.parent / "test-repo"))
+        worktrees = os.environ.get("AIHUB_WORKTREES", str(Path(__file__).resolve().parent.parent.parent / "worktrees"))
         _sp.run(["git", "-C", test_repo, "worktree", "prune"], capture_output=True)
         if os.path.isdir(worktrees):
             _shutil.rmtree(worktrees, ignore_errors=True)

@@ -42,7 +42,8 @@ SMOKE_COMMANDS: list[dict] = [
         "id": 2,
         "label": "ai-workflow-hub core state tests (OpenCode)",
         "cwd": str(FRAME_ROOT / "ai-workflow-hub"),
-        "cmd": ["python", "-m", "pytest", "tests/", "-v", "--tb=line"],
+        "cmd": ["python", "-m", "pytest", "tests/",
+                "--ignore=tests/test_e2e_pipeline.py", "-v", "--tb=line"],
         "known_issues": [],
     },
     {

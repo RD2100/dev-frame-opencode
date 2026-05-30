@@ -156,7 +156,6 @@ FAKE_DIFF = {
 
 class TestFixLoop:
 
-    @pytest.mark.skip(reason="fix-loop subprocess hangs on Windows — debug pending")
     def test_fix_loop_one_round(self, tmp_path):
         from ai_workflow_hub.nodes.human_gate import human_gate_node
         from ai_workflow_hub.nodes.executor import executor_node
@@ -210,10 +209,18 @@ class TestFixLoop:
             "ai_workflow_hub.nodes.tester.run_project_commands",
             side_effect=fake_run_project_commands,
         ), patch(
-            "ai_workflow_hub.git_utils.collect_all_diff_info",
+            "ai_workflow_hub.nodes.executor.collect_all_diff_info",
             return_value=FAKE_DIFF,
         ), patch(
-            "ai_workflow_hub.git_utils.save_diff_patch",
+            "ai_workflow_hub.nodes.fixer.collect_all_diff_info",
+            return_value={"diff_text": "fix diff\n",
+                          "changed_files": ["src/main.py"],
+                          "name_status": {"src/main.py": "M"},
+                          "diff_line_count": 1},
+        ), patch(
+            "ai_workflow_hub.nodes.executor.save_diff_patch",
+        ), patch(
+            "ai_workflow_hub.nodes.fixer.save_diff_patch",
         ):
             # 1. human_gate
             s.update(human_gate_node(s))

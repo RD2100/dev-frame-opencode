@@ -50,12 +50,12 @@ class TestFixerErrorStatus:
         }
 
         with patch(
-            # run_coding_agent is imported inside fixer_node from ..agent_client
-            "ai_workflow_hub.agent_client.run_coding_agent",
+            # opencode_run is imported inside fixer_node from ..opencode_client
+            "ai_workflow_hub.opencode_client.opencode_run",
             return_value=fake_result,
         ), patch(
             # collect_all_diff_info is module-level imported from ..git_utils
-            "ai_workflow_hub.git_utils.collect_all_diff_info",
+            "ai_workflow_hub.nodes.fixer.collect_all_diff_info",
             return_value={
                 "diff_text": "",
                 "changed_files": [],
@@ -63,7 +63,7 @@ class TestFixerErrorStatus:
                 "diff_line_count": 0,
             },
         ), patch(
-            "ai_workflow_hub.git_utils.save_diff_patch",
+            "ai_workflow_hub.nodes.fixer.save_diff_patch",
         ):
             result = fixer_node(state)
 
@@ -107,10 +107,10 @@ class TestFixerErrorStatus:
         }
 
         with patch(
-            "ai_workflow_hub.agent_client.run_coding_agent",
+            "ai_workflow_hub.opencode_client.opencode_run",
             return_value=fake_result,
         ), patch(
-            "ai_workflow_hub.git_utils.collect_all_diff_info",
+            "ai_workflow_hub.nodes.fixer.collect_all_diff_info",
             return_value={
                 "diff_text": "",
                 "changed_files": [],
@@ -118,7 +118,7 @@ class TestFixerErrorStatus:
                 "diff_line_count": 0,
             },
         ), patch(
-            "ai_workflow_hub.git_utils.save_diff_patch",
+            "ai_workflow_hub.nodes.fixer.save_diff_patch",
         ):
             result = fixer_node(state)
 
@@ -161,10 +161,10 @@ class TestFixerErrorStatus:
         }
 
         with patch(
-            "ai_workflow_hub.agent_client.run_coding_agent",
+            "ai_workflow_hub.opencode_client.opencode_run",
             return_value=fake_result,
         ), patch(
-            "ai_workflow_hub.git_utils.collect_all_diff_info",
+            "ai_workflow_hub.nodes.fixer.collect_all_diff_info",
             return_value={
                 "diff_text": "+x",
                 "changed_files": ["file.py"],
@@ -172,7 +172,7 @@ class TestFixerErrorStatus:
                 "diff_line_count": 1,
             },
         ), patch(
-            "ai_workflow_hub.git_utils.save_diff_patch",
+            "ai_workflow_hub.nodes.fixer.save_diff_patch",
         ):
             result = fixer_node(state)
 
