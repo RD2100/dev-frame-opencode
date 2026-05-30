@@ -1,7 +1,7 @@
 ================================================================================
   SMOKE TEST REPORT
 ================================================================================
-  Timestamp : 2026-05-30 23:01:06 中国标准时间
+  Timestamp : 2026-05-30 23:52:04 中国标准时间
   Host      : DESKTOP-KJTQVQB
   OS        : Windows 10 (10.0.19045)
   Python    : 3.10.11
@@ -9,54 +9,45 @@
 --------------------------------------------------------------------------------
   #    Command                                  Exit   Status           Duration     Key Output
   ---- ---------------------------------------- ------ ---------------- ------------ ------------------------------
-  1    CodeGraph type-check                     0      PASS             2313ms       0 errors
-  2    ai-workflow-hub core state tests (OpenCode) 0      PASS             5457ms       77 passed in 4.38s
-  3    ai-workflow-hub-e2e evidence + gate tests 0      PASS             2597ms       175 passed in 1.63s
+  1    CodeGraph type-check                     0      PASS             2215ms       0 errors
+  2    ai-workflow-hub core state tests (OpenCode) -1     FAIL             120024ms     exit_code=-1
+  3    ai-workflow-hub-e2e evidence + gate tests 0      PASS             3104ms       216 passed in 2.03s
 --------------------------------------------------------------------------------
-  Summary : 3 passed, 0 known issues, 0 failed
-  Verdict : PASS
+  Summary : 2 passed, 0 known issues, 1 failed
+  Verdict : FAIL
 ================================================================================
 
 --- Command 1: CodeGraph type-check ---
   CWD       : D:\dev-frame-opencode\codegraph
   CMD       : npx.cmd tsc --noEmit
   Exit Code : 0
-  Duration  : 2313ms
+  Duration  : 2215ms
   Status    : PASS
 
 --- Command 2: ai-workflow-hub core state tests (OpenCode) ---
   CWD       : D:\dev-frame-opencode\ai-workflow-hub
   CMD       : python -m pytest tests/ -v --tb=line
-  Exit Code : 0
-  Duration  : 5457ms
-  Status    : PASS
-  stdout (last 10):
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_infer_blocking_node_executor_timeout PASSED [ 89%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_infer_blocking_node_human_gate PASSED [ 90%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_infer_blocking_node_reviewer_blocked PASSED [ 92%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_infer_blocking_node_fixer_exhausted PASSED [ 93%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_infer_blocking_node_tester_failed PASSED [ 94%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_blocking_reason_each_node PASSED [ 96%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_recommend_next_action_each_node PASSED [ 97%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_build_failure_analysis_failed PASSED [ 98%]
-    | tests/test_workflow_nodes.py::TestFinalizerNodePure::test_build_failure_analysis_includes_blocking_node PASSED [100%]
-    | ============================= 77 passed in 4.38s ==============================
+  Exit Code : -1
+  Duration  : 120024ms
+  Status    : FAIL
+  stderr (last 10):
+    E TIMEOUT after 120s
 
 --- Command 3: ai-workflow-hub-e2e evidence + gate tests ---
   CWD       : D:\dev-frame-opencode\ai-workflow-hub-e2e
   CMD       : python -m pytest tests/fittrack/ tests/test_gate.py tests/test_sha256.py -v --tb=line
   Exit Code : 0
-  Duration  : 2597ms
+  Duration  : 3104ms
   Status    : PASS
   stdout (last 10):
-    | tests/test_gate.py::TestGateMinEvidenceCount::test_min_evidence_blocks_when_below_min PASSED [ 95%]
-    | tests/test_gate.py::TestGateMinEvidenceCount::test_min_evidence_passes_when_above_min PASSED [ 96%]
-    | tests/test_sha256.py::TestSHA256Integrity::test_known_content PASSED     [ 96%]
+    | tests/test_gate.py::TestLoadGateConfig::test_load_release_returns_rules PASSED [ 96%]
+    | tests/test_gate.py::TestLoadGateConfig::test_unknown_gate_type_returns_empty PASSED [ 96%]
+    | tests/test_sha256.py::TestSHA256Integrity::test_known_content PASSED     [ 97%]
     | tests/test_sha256.py::TestSHA256Integrity::test_empty_file PASSED        [ 97%]
-    | tests/test_sha256.py::TestSHA256Integrity::test_binary_content PASSED    [ 97%]
+    | tests/test_sha256.py::TestSHA256Integrity::test_binary_content PASSED    [ 98%]
     | tests/test_sha256.py::TestSHA256Integrity::test_file_not_found_returns_none PASSED [ 98%]
-    | tests/test_sha256.py::TestSHA256Integrity::test_directory_path_returns_none PASSED [ 98%]
+    | tests/test_sha256.py::TestSHA256Integrity::test_directory_path_returns_none PASSED [ 99%]
     | tests/test_sha256.py::TestSHA256Integrity::test_deterministic PASSED     [ 99%]
     | tests/test_sha256.py::TestSHA256Integrity::test_large_file PASSED        [100%]
-    | ============================= 175 passed in 1.63s =============================
+    | ============================= 216 passed in 2.03s =============================
 

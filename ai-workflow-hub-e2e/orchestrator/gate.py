@@ -13,7 +13,10 @@ from datetime import datetime
 
 
 def load_gate_config(gate_type: str = "pr") -> dict:
-    """加载门禁规则"""
+    """加载门禁规则.
+
+    返回规则 dict 或 {"_load_error": "<reason>"}（加载失败时）。
+    """
     gate_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "config", "gates.yaml"
@@ -22,15 +25,25 @@ def load_gate_config(gate_type: str = "pr") -> dict:
         with open(gate_path, "r", encoding="utf-8") as f:
             gates = yaml.safe_load(f) or {}
         return gates.get("gates", {}).get(gate_type, {})
-    except Exception:
-        return {}
+    except FileNotFoundError:
+        return {"_load_error": f"gates.yaml not found: {gate_path}"}
+    except yaml.YAMLError as e:
+        return {"_load_error": f"gates.yaml parse error: {e}"}
+    except Exception as e:
+        return {"_load_error": f"gates.yaml load error: {e}"}
 
 
 def evaluate(gate_type: str, results: list[dict], crash_count: int = 0) -> tuple:
-    """评估门禁，返回 (passed: bool, failures: list, metrics: dict)"""
+    """评估门禁，返回 (passed: bool, failures: list, metrics: dict).
+
+    若配置加载失败（含 _load_error 标记），返回 passed=False，
+    failures 中包含加载错误信息。不再静默通过。
+    """
     rules = load_gate_config(gate_type)
     if not rules:
         return True, [], {}
+    if "_load_error" in rules:
+        return False, [rules["_load_error"]], {}
 
     # 从结果列表计算指标
     total = len(results)

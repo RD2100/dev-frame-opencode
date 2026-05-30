@@ -30,11 +30,6 @@ def load_config(project_name: str) -> dict:
     # 加载账号
     config["_accounts"] = _load_yaml(os.path.join(CONFIG_ROOT, "accounts.yaml"))
 
-    # 加载门禁配置
-    gate_path = os.path.join(CONFIG_ROOT, "gates.yaml")
-    if os.path.exists(gate_path):
-        config["_gates"] = _load_yaml(gate_path)
-
     return config
 
 
