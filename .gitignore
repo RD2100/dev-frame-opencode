@@ -1,0 +1,70 @@
+# dev-frame-opencode monorepo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Build
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# SQLite WAL/backup
+*.db-wal
+*.db-shm
+*.db.bak
+
+# CodeGraph index (build artifact, not source)
+.codegraph/
+
+# Test coverage
+coverage/
+.nyc_output/
+test-results/
+
+# Reports / artifacts
+allure-results/
+allure-report/
+
+# .aiworkflow session state (generated, not source)
+.aiworkflow/session/
+
+# Blackboard state (generated)
+.claude/blackboard/
+
+# Large files
+*.apk
+*.ipa
+*.zip
+*.mp4
+
+# Temporary
+*.tmp
+*.patch
