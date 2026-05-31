@@ -72,12 +72,15 @@ def _write_fix_control(run_dir: str, mode: str, pause: bool = False):
 class TestHumanGatePauseResume:
 
     def test_graph_invoke_pause_approve_continue(self, tmp_path):
-        """Full graph.invoke() flow: pause → write approved → resume → completes.
+        """Full graph.invoke() cycle with explicit state injection.
 
-        Uses compile_graph().invoke() with explicit state injection
-        (simulating aihub resume). Verifies the complete lifecycle:
-        gate triggers → execution blocked → decision written →
-        re-invoke clears gate → executor + tester + finalizer run.
+        NOT graph.invoke(None) checkpoint resume (MemorySaver unreliable).
+        NOT CLI resume (aihub resume not implemented yet).
+
+        Flow: first invoke pauses at gate → write approved →
+        re-invoke with cleared state → gate passes → pipeline completes.
+        This simulates the aihub resume pattern: load state.json,
+        clear human_required, re-invoke.
         """
         from ai_workflow_hub.workflows.coding_graph import compile_graph
         from ai_workflow_hub.schemas import WorkflowState
