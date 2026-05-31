@@ -72,6 +72,9 @@ class WorkflowState(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
     changed_files_status: dict[str, str] = Field(default_factory=dict)  # {filepath: A|M|D|R|...}
     diff_line_count: int = 0
+    safety_overall: str = ""
+    safety_report: dict[str, Any] = Field(default_factory=dict)
+    forbidden_paths_touched: list[str] = Field(default_factory=list)
 
     # --- 复审结果 ---
     review_result: str = ""  # pass | fail | human_gate | blocked
@@ -86,6 +89,9 @@ class WorkflowState(BaseModel):
     # --- 安全标记 ---
     dangerous_change: bool = False
     human_required: bool = False
+    # M3: decision file tracking
+    human_gate_triggered: bool = False
+    human_gate_decision: str = ""  # approved | rejected
 
     # --- 后端调用审计 ---
     backend_calls: dict[str, Any] = Field(default_factory=dict)
@@ -93,7 +99,7 @@ class WorkflowState(BaseModel):
     # --- 副作用追踪 (防恢复时重复调用 OpenCode) ---
     executed_nodes: list[str] = Field(default_factory=list)  # 已执行的节点名
     side_effect_nodes: list[str] = Field(
-        default_factory=lambda: ["execute_node"]
+        default_factory=lambda: ["execute_node", "fix_node"]
     )  # 仅 execute_node 防恢复时重复调用 OpenCode
 
     # --- 状态 ---

@@ -67,6 +67,7 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
         _human_gate_route,
         {
             "execute_node": "execute_node",
+            "final_node": "final_node",
             "__end__": END,
         },
     )
@@ -226,7 +227,7 @@ def _wrap_with_guard(fn, node_name: str):
     """Wrap 副作用节点 (execute_node, fix_node).
 
     execute_node: 恢复时已执行则跳过，避免重复调用 OpenCode。
-    fix_node: 按轮次允许重复: fix_node:0, fix_node:1, ...
+    fix_node: 按轮次允许重复: fix_node:1, fix_node:2, ...
     """
 
     def guarded(state: dict[str, Any] | WorkflowState | Any) -> dict[str, Any]:
@@ -238,12 +239,14 @@ def _wrap_with_guard(fn, node_name: str):
             state_dict = dict(state) if state else {}
 
         executed = set(state_dict.get("executed_nodes", []))
-        side_effect = state_dict.get("side_effect_nodes", ["execute_node", "fix_node"])
+        side_effect = set(state_dict.get("side_effect_nodes", ["execute_node", "fix_node"]))
+        next_round = 0
 
         if node_name not in side_effect:
             pass
         elif node_name == "fix_node":
-            round_key = f"{node_name}:{state_dict.get('fix_round', 0)}"
+            next_round = state_dict.get("fix_round", 0) + 1
+            round_key = f"{node_name}:{next_round}"
             if round_key in executed:
                 state_dict.setdefault("execution_log", "")
                 state_dict["execution_log"] += f"\n[SKIPPED] {round_key} already executed (resumed from checkpoint)\n"
@@ -263,7 +266,7 @@ def _wrap_with_guard(fn, node_name: str):
         # 标记已执行
         executed_list = list(state_dict.get("executed_nodes", []))
         if node_name == "fix_node":
-            mark = f"{node_name}:{state_dict.get('fix_round', 0)}"
+            mark = f"{node_name}:{next_round}"
         else:
             mark = node_name
         if mark not in executed_list:
