@@ -11,9 +11,6 @@ M3: 决策文件驱动的可干预 pipeline。
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from langgraph.graph import StateGraph, END
@@ -26,82 +23,12 @@ from ..nodes.fixer import fixer_node
 from ..nodes.human_gate import human_gate_node
 from ..nodes.finalizer import finalizer_node
 
-# ---------------------------------------------------------------------------
-# M3: decision file helpers
-# ---------------------------------------------------------------------------
-
-VALID_DECISION_STATUSES = {"pending", "approved", "rejected", "continue", "abort", "skip"}
-SIDE_EFFECT_NODES = {"execute_node", "fix_node"}
-TERMINAL_STATUSES = {"passed", "failed", "blocked", "rejected"}
-
-
-@dataclass
-class Decision:
-    """结构化决策文件读取结果."""
-    status: str | None
-    exists: bool
-    valid: bool
-    error: str | None = None
-
-
-def _read_decision(run_dir: str, name: str) -> Decision:
-    """读取 decisions/{name}.json，返回结构化 Decision."""
-    if not run_dir:
-        return Decision(status=None, exists=False, valid=True)
-    path = Path(run_dir) / "decisions" / f"{name}.json"
-    if not path.exists():
-        return Decision(status=None, exists=False, valid=True)
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        status = data.get("status")
-        if status is None:
-            return Decision(status=None, exists=True, valid=False,
-                          error="missing 'status' field")
-        if status not in VALID_DECISION_STATUSES:
-            return Decision(status=status, exists=True, valid=False,
-                          error=f"invalid status: '{status}'")
-        return Decision(status=status, exists=True, valid=True)
-    except json.JSONDecodeError as e:
-        return Decision(status=None, exists=True, valid=False,
-                      error=f"JSON parse error: {e}")
-    except OSError as e:
-        return Decision(status=None, exists=True, valid=False,
-                      error=f"read error: {e}")
-
-
-@dataclass
-class FixControl:
-    """fix-control.json 结构化读取结果."""
-    mode: str
-    pause_before_next_fix: bool
-    exists: bool
-    valid: bool
-    error: str | None = None
-
-
-def _read_fix_control(run_dir: str) -> FixControl:
-    """读取 decisions/fix-control.json."""
-    if not run_dir:
-        return FixControl(mode="auto", pause_before_next_fix=False, exists=False, valid=True)
-    path = Path(run_dir) / "decisions" / "fix-control.json"
-    if not path.exists():
-        return FixControl(mode="auto", pause_before_next_fix=False, exists=False, valid=True)
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        mode = data.get("mode", "auto")
-        pause = data.get("pause_before_next_fix", False)
-        if mode not in ("auto", "supervised"):
-            return FixControl(mode=mode, pause_before_next_fix=pause,
-                            exists=True, valid=False, error=f"invalid mode: '{mode}'")
-        if not isinstance(pause, bool):
-            return FixControl(mode=mode, pause_before_next_fix=bool(pause),
-                            exists=True, valid=False, error=f"pause_before_next_fix not bool: {pause}")
-        return FixControl(mode=mode, pause_before_next_fix=pause, exists=True, valid=True)
-    except (json.JSONDecodeError, OSError) as e:
-        return FixControl(mode="auto", pause_before_next_fix=False,
-                        exists=True, valid=False, error=str(e))
+# M3: decision file helpers (shared module, no circular imports)
+from ..run_decisions import (
+    Decision, FixControl,
+    _read_decision, _read_fix_control,
+    SIDE_EFFECT_NODES, TERMINAL_STATUSES,
+)
 
 
 def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
@@ -231,6 +158,8 @@ def _test_route(state: dict[str, Any] | Any) -> str:
     if test_passed:
         return "final_node"
 
+    # fix_round = completed fix attempts so far.
+    # Before entering the NEXT fix, read fix-before-round-{fix_round+1}.json.
     fix_round = s.get("fix_round", 0)
     max_fix_rounds = s.get("max_fix_rounds", 3)
     if fix_round >= max_fix_rounds:

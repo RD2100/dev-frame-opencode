@@ -164,7 +164,7 @@ class TestDecisionFileCorruption:
 
     def test_corrupt_json_returns_invalid(self, tmp_path):
         """T5: corrupt JSON → Decision.valid=False."""
-        from ai_workflow_hub.workflows.coding_graph import _read_decision
+        from ai_workflow_hub.run_decisions import read_decision as _read_decision
 
         run_dir = str(tmp_path)
         path = Path(run_dir) / "decisions"
@@ -178,7 +178,7 @@ class TestDecisionFileCorruption:
 
     def test_missing_file_returns_none_status(self, tmp_path):
         """File doesn't exist → status=None, exists=False, valid=True."""
-        from ai_workflow_hub.workflows.coding_graph import _read_decision
+        from ai_workflow_hub.run_decisions import read_decision as _read_decision
 
         d = _read_decision(str(tmp_path), "nonexistent")
         assert d.status is None
@@ -187,7 +187,7 @@ class TestDecisionFileCorruption:
 
     def test_invalid_status_is_invalid(self, tmp_path):
         """Status not in allowed set → valid=False."""
-        from ai_workflow_hub.workflows.coding_graph import _read_decision
+        from ai_workflow_hub.run_decisions import read_decision as _read_decision
 
         run_dir = str(tmp_path)
         path = Path(run_dir) / "decisions"
@@ -204,7 +204,7 @@ class TestFixControl:
 
     def test_read_fix_control_defaults(self, tmp_path):
         """No control file → defaults."""
-        from ai_workflow_hub.workflows.coding_graph import _read_fix_control
+        from ai_workflow_hub.run_decisions import read_fix_control as _read_fix_control
 
         c = _read_fix_control(str(tmp_path))
         assert c.mode == "auto"
@@ -214,7 +214,7 @@ class TestFixControl:
 
     def test_invalid_fix_control_mode(self, tmp_path):
         """Invalid mode → valid=False."""
-        from ai_workflow_hub.workflows.coding_graph import _read_fix_control
+        from ai_workflow_hub.run_decisions import read_fix_control as _read_fix_control
 
         run_dir = str(tmp_path)
         path = Path(run_dir) / "decisions"
@@ -239,9 +239,27 @@ class TestFixerRecords:
         from ai_workflow_hub.nodes.fixer import _write_fix_record
 
         with tempfile.TemporaryDirectory() as td:
-            _write_fix_record(td, 1)
+            _write_fix_record(td, 1, applied=True)
             assert Path(td, "fix-records", "fix-after-round-1.json").exists()
             assert not Path(td, "decisions", "fix-after-round-1.json").exists()
+            # verify content
+            import json
+            data = json.loads(
+                Path(td, "fix-records", "fix-after-round-1.json").read_text(encoding="utf-8"))
+            assert data["applied"] is True
+            assert data["round"] == 1
+
+    def test_fix_record_dry_run_marked(self):
+        """dry-run fix record sets applied=False."""
+        import tempfile
+        from ai_workflow_hub.nodes.fixer import _write_fix_record
+
+        with tempfile.TemporaryDirectory() as td:
+            _write_fix_record(td, 2, applied=False)
+            import json
+            data = json.loads(
+                Path(td, "fix-records", "fix-after-round-2.json").read_text(encoding="utf-8"))
+            assert data["applied"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +280,55 @@ class TestEvidenceCompat:
         state = {"human_gate_triggered": True, "status": "passed", "run_dir": run_dir}
 
         # Should not crash — legacy compat
-        from ai_workflow_hub.workflows.coding_graph import _read_decision
+        from ai_workflow_hub.run_decisions import read_decision as _read_decision
         d = _read_decision(run_dir, "human-gate")
         assert d.exists is False  # no decision file
+
+
+# ---------------------------------------------------------------------------
+# _side_effect_route control flow (P3 audit requirement)
+# ---------------------------------------------------------------------------
+
+class TestSideEffectRoute:
+
+    def test_executor_failed_skips_test_node(self):
+        """executor returns failed → route to final, not test."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {"status": "failed"}
+        assert _side_effect_route(state) == "final_node"
+
+    def test_executor_blocked_skips_test_node(self):
+        """executor returns blocked → route to final."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {"status": "blocked"}
+        assert _side_effect_route(state) == "final_node"
+
+    def test_executor_rejected_skips_test_node(self):
+        """executor returns rejected → route to final."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {"status": "rejected"}
+        assert _side_effect_route(state) == "final_node"
+
+    def test_executor_human_required_skips_test_node(self):
+        """executor returns human_required → route to final."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {"status": "human_required"}
+        assert _side_effect_route(state) == "final_node"
+
+    def test_fixer_normal_continues_to_test(self):
+        """Normal fix completion → test_node."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {"status": "running"}
+        assert _side_effect_route(state) == "test_node"
+
+    def test_executor_normal_continues_to_test(self):
+        """Normal executor completion → test_node."""
+        from ai_workflow_hub.workflows.coding_graph import _side_effect_route
+
+        state = {}
+        assert _side_effect_route(state) == "test_node"

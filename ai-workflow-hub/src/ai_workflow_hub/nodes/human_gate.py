@@ -232,7 +232,7 @@ def human_gate_node(state: dict[str, Any]) -> dict[str, Any]:
         return {"human_required": False, "status": state.get("status", "running")}
 
     # --- M3: 重执行时检查已有决策 ---
-    from ..workflows.coding_graph import _read_decision
+    from ..run_decisions import read_decision as _read_decision
     d = _read_decision(run_dir, "human-gate")
     if d.valid:
         if d.status == "approved":

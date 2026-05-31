@@ -68,9 +68,6 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
     cwd = worktree_path or project_path
     state["fix_round"] = fix_round
 
-    # M3: write fix record to fix-records/ (NOT decisions/)
-    _write_fix_record(run_dir, fix_round)
-
     if dry_run and not apply_changes:
         # dry-run: 不调用 OpenCode
         fix_log = f"# Fix Log (Round {fix_round}) [DRY-RUN]\n\nWould fix:\n"
@@ -82,6 +79,9 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
 
         prev_log = state.get("execution_log", "")
         save_run_file(run_dir, "execution-log.md", prev_log + "\n\n" + fix_log)
+
+        # M3: record dry-run fix attempt
+        _write_fix_record(run_dir, fix_round, applied=False)
 
         return {
             "fix_round": fix_round,
@@ -155,11 +155,19 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
     if has_error:
         result_dict["status"] = "failed"
 
+    # M3: record apply fix result
+    _write_fix_record(run_dir, fix_round, applied=True)
+
     return result_dict
 
 
-def _write_fix_record(run_dir: str, fix_round: int) -> None:
-    """M3: write fix-after-round-{N}.json record to fix-records/."""
+def _write_fix_record(run_dir: str, fix_round: int, applied: bool = False) -> None:
+    """M3: write fix-after-round-{N}.json record to fix-records/.
+
+    Called after the fix attempt completes (dry-run or apply).
+    Not called before the attempt — avoids polluting fix-records with
+    records of fixes that haven't happened yet.
+    """
     import json as _json
     from datetime import datetime, timezone
 
@@ -172,6 +180,7 @@ def _write_fix_record(run_dir: str, fix_round: int) -> None:
         "decision_type": "fix-after-round",
         "round": fix_round,
         "status": "record",
+        "applied": applied,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": "pipeline",
     }, indent=2, ensure_ascii=False), encoding="utf-8")
