@@ -11,6 +11,7 @@ from typing import Any
 from ..config_loader import _hub_dir
 from ..run_store import save_run_file
 from ..git_utils import collect_all_diff_info, save_diff_patch
+from .evidence import collect_safety_evidence
 
 
 def build_fixer_prompt(state: dict[str, Any]) -> str:
@@ -67,6 +68,9 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
     cwd = worktree_path or project_path
     state["fix_round"] = fix_round
 
+    # M3: write fix record to fix-records/ (NOT decisions/)
+    _write_fix_record(run_dir, fix_round)
+
     if dry_run and not apply_changes:
         # dry-run: 不调用 OpenCode
         fix_log = f"# Fix Log (Round {fix_round}) [DRY-RUN]\n\nWould fix:\n"
@@ -112,6 +116,7 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
 
     diff_info = collect_all_diff_info(cwd)
     save_diff_patch(cwd, str(Path(run_dir) / "diff.patch"))
+    safety_evidence = collect_safety_evidence(state, cwd, diff_info)
 
     fix_log = f"# Fix Log (Round {fix_round})\n\n{execution_log}\n"
     prev_log = state.get("execution_log", "")
@@ -144,9 +149,30 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
                 "stderr_log": str(Path(run_dir) / f"{backend}-fixer-r{fix_round}-stderr.log"),
             }
         },
+        **safety_evidence,
     }
 
     if has_error:
         result_dict["status"] = "failed"
 
     return result_dict
+
+
+def _write_fix_record(run_dir: str, fix_round: int) -> None:
+    """M3: write fix-after-round-{N}.json record to fix-records/."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    records_dir = Path(run_dir) / "fix-records"
+    records_dir.mkdir(parents=True, exist_ok=True)
+    record_path = records_dir / f"fix-after-round-{fix_round}.json"
+
+    tmp = record_path.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps({
+        "decision_type": "fix-after-round",
+        "round": fix_round,
+        "status": "record",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": "pipeline",
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(record_path)

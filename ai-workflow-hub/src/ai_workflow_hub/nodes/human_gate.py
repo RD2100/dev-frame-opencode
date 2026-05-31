@@ -199,11 +199,15 @@ def _build_resume_command(state: dict[str, Any]) -> str:
 
 
 def human_gate_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Human Gate 节点.
+    """Human Gate 节点 — M3: 决策文件驱动的可干预 gate.
 
-    只在以下条件触发: high risk / dangerous_change / human_required flag.
-    否则 pass-through 到 execute_node.
+    首次触发: 写 human-gate.md + decisions/human-gate.json (status=pending)
+    重执行: 检查决策文件 → approved=继续 / rejected=结束
+    幂等: 决策文件存在时不覆盖外部写入
     """
+    import json as _json
+    from datetime import datetime, timezone
+
     run_dir = state.get("run_dir", "")
     task_risk = state.get("task_risk", "medium")
     dangerous = state.get("dangerous_change", False)
@@ -227,11 +231,63 @@ def human_gate_node(state: dict[str, Any]) -> dict[str, Any]:
         # 不需要 gate，直接通过
         return {"human_required": False, "status": state.get("status", "running")}
 
-    # 需要 gate: 生成报告，停止
+    # --- M3: 重执行时检查已有决策 ---
+    from ..workflows.coding_graph import _read_decision
+    d = _read_decision(run_dir, "human-gate")
+    if d.valid:
+        if d.status == "approved":
+            return {
+                "human_required": False, "status": "running",
+                "human_gate_triggered": True, "human_gate_decision": "approved",
+            }
+        if d.status == "rejected":
+            return {
+                "human_required": False, "status": "rejected",
+                "human_gate_triggered": True, "human_gate_decision": "rejected",
+                "blocked_reason": "human_gate_rejected",
+            }
+
+    # 首次触发: 写 human-gate.md（保留原有行为）
     content = build_human_gate_content(state)
     save_run_file(run_dir, "human-gate.md", content)
+
+    # M3: 仅当决策文件不存在时原子写入
+    decisions_dir = Path(run_dir) / "decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+    decision_path = decisions_dir / "human-gate.json"
+    if not decision_path.exists():
+        tmp = decision_path.with_suffix(".json.tmp")
+        tmp.write_text(_json.dumps({
+            "decision_type": "human-gate",
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": "pipeline",
+            "reason": _gate_reason(state),
+            "context": {
+                "task_risk": task_risk,
+                "dangerous_change": dangerous,
+                "affected_files": state.get("allowed_files", []),
+            },
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(decision_path)
 
     return {
         "status": "human_required",
         "human_required": True,
+        "human_gate_triggered": True,
     }
+
+
+def _gate_reason(state: dict[str, Any]) -> str:
+    """生成 human_gate 触发原因."""
+    parts = []
+    if state.get("task_risk") == "high":
+        parts.append("task_risk=high")
+    if state.get("dangerous_change"):
+        parts.append("dangerous_change=true")
+    if state.get("human_required"):
+        parts.append("human_required flag set")
+    review = state.get("review_result", "")
+    if review in ("human_gate", "blocked"):
+        parts.append(f"review_result={review}")
+    return "; ".join(parts) if parts else "unknown"

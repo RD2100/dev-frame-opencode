@@ -1,11 +1,19 @@
 """LangGraph 工作流定义 — OpenCode-only 编码闭环 (5 节点).
 
 节点: human_gate -> execute -> test -> fix/final
-路由: test passes -> final, test fails & rounds < max -> fix, fails & rounds >= max -> final
+路由: execute/fix 产生终态 -> final；否则 test passes -> final, test fails & rounds < max -> fix
+
+M3: 决策文件驱动的可干预 pipeline。
+- decisions/human-gate.json: pending/approved/rejected
+- decisions/fix-before-round-{N}.json: continue/pending/abort/skip
+- decisions/fix-control.json: mode=auto|supervised, pause_before_next_fix
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from langgraph.graph import StateGraph, END
@@ -18,6 +26,83 @@ from ..nodes.fixer import fixer_node
 from ..nodes.human_gate import human_gate_node
 from ..nodes.finalizer import finalizer_node
 
+# ---------------------------------------------------------------------------
+# M3: decision file helpers
+# ---------------------------------------------------------------------------
+
+VALID_DECISION_STATUSES = {"pending", "approved", "rejected", "continue", "abort", "skip"}
+SIDE_EFFECT_NODES = {"execute_node", "fix_node"}
+TERMINAL_STATUSES = {"passed", "failed", "blocked", "rejected"}
+
+
+@dataclass
+class Decision:
+    """结构化决策文件读取结果."""
+    status: str | None
+    exists: bool
+    valid: bool
+    error: str | None = None
+
+
+def _read_decision(run_dir: str, name: str) -> Decision:
+    """读取 decisions/{name}.json，返回结构化 Decision."""
+    if not run_dir:
+        return Decision(status=None, exists=False, valid=True)
+    path = Path(run_dir) / "decisions" / f"{name}.json"
+    if not path.exists():
+        return Decision(status=None, exists=False, valid=True)
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        status = data.get("status")
+        if status is None:
+            return Decision(status=None, exists=True, valid=False,
+                          error="missing 'status' field")
+        if status not in VALID_DECISION_STATUSES:
+            return Decision(status=status, exists=True, valid=False,
+                          error=f"invalid status: '{status}'")
+        return Decision(status=status, exists=True, valid=True)
+    except json.JSONDecodeError as e:
+        return Decision(status=None, exists=True, valid=False,
+                      error=f"JSON parse error: {e}")
+    except OSError as e:
+        return Decision(status=None, exists=True, valid=False,
+                      error=f"read error: {e}")
+
+
+@dataclass
+class FixControl:
+    """fix-control.json 结构化读取结果."""
+    mode: str
+    pause_before_next_fix: bool
+    exists: bool
+    valid: bool
+    error: str | None = None
+
+
+def _read_fix_control(run_dir: str) -> FixControl:
+    """读取 decisions/fix-control.json."""
+    if not run_dir:
+        return FixControl(mode="auto", pause_before_next_fix=False, exists=False, valid=True)
+    path = Path(run_dir) / "decisions" / "fix-control.json"
+    if not path.exists():
+        return FixControl(mode="auto", pause_before_next_fix=False, exists=False, valid=True)
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        mode = data.get("mode", "auto")
+        pause = data.get("pause_before_next_fix", False)
+        if mode not in ("auto", "supervised"):
+            return FixControl(mode=mode, pause_before_next_fix=pause,
+                            exists=True, valid=False, error=f"invalid mode: '{mode}'")
+        if not isinstance(pause, bool):
+            return FixControl(mode=mode, pause_before_next_fix=bool(pause),
+                            exists=True, valid=False, error=f"pause_before_next_fix not bool: {pause}")
+        return FixControl(mode=mode, pause_before_next_fix=pause, exists=True, valid=True)
+    except (json.JSONDecodeError, OSError) as e:
+        return FixControl(mode="auto", pause_before_next_fix=False,
+                        exists=True, valid=False, error=str(e))
+
 
 def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
     """创建编码工作流状态图 (带 checkpointer).
@@ -27,10 +112,9 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
     start
       |
     human_gate_node         [入口 — 接收 TaskSpec]
-      |
     execute_node             [调用 OpenCode 执行代码修改]
-      |
-    test_node                [每个 fix 轮后重新执行]
+      |-- terminal -> final_node
+      |-- continue -> test_node [每个 fix 轮后重新执行]
       |
     (test route)
       |-- passed -> final_node
@@ -60,8 +144,15 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
         },
     )
 
-    # execute -> test
-    graph.add_edge("execute_node", "test_node")
+    # execute -> test/final
+    graph.add_conditional_edges(
+        "execute_node",
+        _side_effect_route,
+        {
+            "test_node": "test_node",
+            "final_node": "final_node",
+        },
+    )
 
     # test -> route_decision
     graph.add_conditional_edges(
@@ -73,8 +164,15 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
         },
     )
 
-    # fix -> test
-    graph.add_edge("fix_node", "test_node")
+    # fix -> test/final
+    graph.add_conditional_edges(
+        "fix_node",
+        _side_effect_route,
+        {
+            "test_node": "test_node",
+            "final_node": "final_node",
+        },
+    )
 
     # final -> END
     graph.add_edge("final_node", END)
@@ -103,15 +201,31 @@ def _s(state: dict[str, Any] | Any) -> dict[str, Any]:
 
 
 def _human_gate_route(state: dict[str, Any] | Any) -> str:
-    """human_gate 后路由: 如果需要人工 -> END, 否则继续 execute."""
+    """human_gate 后路由: rejected/blocked -> final;
+    human_required -> 查决策文件 (approved->execute, rejected->final, pending->END);
+    否则 -> execute."""
     s = _s(state)
+
+    # P0: rejected/blocked 不得进入 execute_node
+    if s.get("status") in ("blocked", "rejected"):
+        return "final_node"
+
     if s.get("human_required", False) or s.get("status") == "human_required":
+        d = _read_decision(s.get("run_dir", ""), "human-gate")
+        if not d.valid:
+            return "__end__"      # 损坏 JSON → 暂停
+        if d.status == "approved":
+            return "execute_node"
+        if d.status == "rejected":
+            return "final_node"
+        # pending 或文件不存在 → 暂停
         return "__end__"
+
     return "execute_node"
 
 
 def _test_route(state: dict[str, Any] | Any) -> str:
-    """test 后路由: test 通过 -> final, 失败但有 round 剩余 -> fix, 失败无 round -> final."""
+    """test 后路由: pass -> final; fail + round < max -> 查决策 -> fix/final/END."""
     s = _s(state)
     test_passed = s.get("test_exit_code", -1) == 0
     if test_passed:
@@ -119,10 +233,45 @@ def _test_route(state: dict[str, Any] | Any) -> str:
 
     fix_round = s.get("fix_round", 0)
     max_fix_rounds = s.get("max_fix_rounds", 3)
-    if fix_round < max_fix_rounds:
-        return "fix_node"
+    if fix_round >= max_fix_rounds:
+        return "final_node"
 
-    return "final_node"
+    next_round = fix_round + 1
+    run_dir = s.get("run_dir", "")
+
+    # 1. 全局控制
+    control = _read_fix_control(run_dir)
+    if not control.valid:
+        return "__end__"         # 损坏控制文件 → 暂停
+
+    # 2. 本轮决策
+    d = _read_decision(run_dir, f"fix-before-round-{next_round}")
+    if not d.valid:
+        return "__end__"         # 损坏决策文件 → 暂停
+
+    if d.status in ("abort", "skip"):
+        return "final_node"
+    if d.status == "pending":
+        return "__end__"
+
+    # 3. supervised 模式或无决策文件 → 检查是否需要暂停
+    if control.mode == "supervised" and not d.exists:
+        return "__end__"
+    if control.pause_before_next_fix and not d.exists:
+        return "__end__"
+
+    # 4. 默认: continue 或文件不存在(auto 模式) → 进入 fix_node
+    return "fix_node"
+
+
+def _side_effect_route(state: dict[str, Any] | Any) -> str:
+    """Route after executor/fixer: terminal statuses skip more side effects."""
+    s = _s(state)
+    if s.get("human_required", False):
+        return "final_node"
+    if s.get("status") in ("failed", "blocked", "human_required", "rejected"):
+        return "final_node"
+    return "test_node"
 
 
 def _wrap(fn):
