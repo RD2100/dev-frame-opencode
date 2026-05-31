@@ -71,42 +71,53 @@ def _write_fix_control(run_dir: str, mode: str, pause: bool = False):
 
 class TestHumanGatePauseResume:
 
-    def test_pause_on_high_risk_then_approve_and_continue(self, tmp_path):
-        """human_gate_node pause → write approved → re-run → clears gate, proceeds.
+    def test_graph_invoke_pause_approve_continue(self, tmp_path):
+        """Full graph.invoke() flow: pause → write approved → resume → completes.
 
-        Uses manual node invocation to verify the pause-approve-continue
-        lifecycle. The graph invoke pattern with MemorySaver checkpoint
-        resume is verified separately at the routing level.
+        Uses compile_graph().invoke() with explicit state injection
+        (simulating aihub resume). Verifies the complete lifecycle:
+        gate triggers → execution blocked → decision written →
+        re-invoke clears gate → executor + tester + finalizer run.
         """
-        from ai_workflow_hub.nodes.human_gate import human_gate_node
-        from ai_workflow_hub.nodes.executor import executor_node
+        from ai_workflow_hub.workflows.coding_graph import compile_graph
+        from ai_workflow_hub.schemas import WorkflowState
 
         project = _setup_project(tmp_path)
-        run_dir = str(tmp_path / "runs" / "int-t1")
+        run_dir = str(tmp_path / "runs" / "int-graph")
         Path(run_dir).mkdir(parents=True)
 
-        s = _base_state(str(project), run_dir, task_risk="high")
+        state_data = _base_state(str(project), run_dir, task_risk="high")
+        state = WorkflowState(**state_data)
 
-        # --- first call: gate triggers ---
-        s.update(human_gate_node(s))
-        assert s.get("human_required") is True
-        assert s.get("human_gate_triggered") is True
+        graph = compile_graph("m3-int-graph")
+
+        # --- first invoke: gate triggers, graph stops ---
+        r1 = graph.invoke(
+            state.model_dump(),
+            {"configurable": {"thread_id": "m3-int-graph"}},
+        )
+        assert r1.get("status") == "human_required"
+        assert r1.get("human_gate_triggered") is True
         assert Path(run_dir, "decisions", "human-gate.json").exists()
-        assert not Path(run_dir, "execution-log.md").exists()
+        assert not Path(run_dir, "execution-log.md").exists(), \
+            "executor must not run before gate approval"
 
         # --- write approved decision ---
         _write_decision(run_dir, "human-gate", "approved")
 
-        # --- re-run human_gate: should detect approved and clear ---
-        s.update(human_gate_node(s))
-        assert s.get("human_required") is False, \
-            f"expected gate cleared, got human_required={s.get('human_required')}"
-        assert s.get("human_gate_decision") == "approved"
-
-        # --- proceed to executor ---
-        s.update(executor_node(s))
+        # --- second invoke: resume with cleared gate ---
+        # Use r1 result + human_required=False to simulate aihub resume
+        resume_state = WorkflowState(**{**r1, "human_required": False})
+        r2 = graph.invoke(
+            resume_state.model_dump(),
+            {"configurable": {"thread_id": "m3-int-graph-2"}},
+        )
+        assert r2.get("human_required") is False
+        assert r2.get("human_gate_decision") == "approved"
         assert Path(run_dir, "execution-log.md").exists(), \
-            "executor should have run after gate approval"
+            "executor should run after gate approval"
+        assert Path(run_dir, "final-report.md").exists(), \
+            "finalizer should produce report"
 
     def test_rejected_goes_to_final(self, tmp_path):
         """Write rejected → graph invoke → should end without execution."""
