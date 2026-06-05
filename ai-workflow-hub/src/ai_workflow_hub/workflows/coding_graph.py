@@ -1,12 +1,17 @@
-"""LangGraph 工作流定义 — OpenCode-only 编码闭环 (5 节点).
+"""LangGraph 工作流定义 — OpenCode-only 编码闭环 (7 节点).
 
-节点: human_gate -> execute -> test -> fix/final
-路由: execute/fix 产生终态 -> final；否则 test passes -> final, test fails & rounds < max -> fix
+节点: plan_auditor -> human_gate -> execute -> test -> reviewer -> fix/final
+路由: plan_auditor 阻塞 -> final; plan_auditor clean/human_required -> human_gate;
+      execute/fix 产生终态 -> final；test passes -> reviewer；
+      reviewer pass -> final；reviewer block -> final (blocked)；
+      test fails & rounds < max -> fix
 
 M3: 决策文件驱动的可干预 pipeline。
 - decisions/human-gate.json: pending/approved/rejected
 - decisions/fix-before-round-{N}.json: continue/pending/abort/skip
 - decisions/fix-control.json: mode=auto|supervised, pause_before_next_fix
+
+M4-B1: plan_auditor_node 入口 — 确定性 plan scope 校验，在 human_gate 之前阻塞或提审不合理的 scope。
 """
 
 from __future__ import annotations
@@ -17,9 +22,11 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..schemas import WorkflowState
+from ..nodes.plan_auditor import plan_auditor_node
 from ..nodes.executor import executor_node
 from ..nodes.tester import tester_node
 from ..nodes.fixer import fixer_node
+from ..nodes.reviewer import reviewer_node
 from ..nodes.human_gate import human_gate_node
 from ..nodes.finalizer import finalizer_node
 
@@ -51,15 +58,27 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
 
     graph = StateGraph(WorkflowState)
 
-    # 添加节点
+    # 添加节点 (M4-B1: plan_auditor 为入口, 在 human_gate 之前)
+    graph.add_node("plan_auditor_node", _wrap(plan_auditor_node))
     graph.add_node("human_gate_node", _wrap(human_gate_node))
     graph.add_node("execute_node", _wrap_with_guard(executor_node, "execute_node"))
     graph.add_node("test_node", _wrap(tester_node))
+    graph.add_node("reviewer_node", _wrap(reviewer_node))
     graph.add_node("fix_node", _wrap_with_guard(fixer_node, "fix_node"))
     graph.add_node("final_node", _wrap(finalizer_node))
 
-    # 入口: human_gate
-    graph.set_entry_point("human_gate_node")
+    # 入口: plan_auditor
+    graph.set_entry_point("plan_auditor_node")
+
+    # plan_auditor -> human_gate (clean/human_required) 或 final (blocked)
+    graph.add_conditional_edges(
+        "plan_auditor_node",
+        _plan_auditor_route,
+        {
+            "human_gate_node": "human_gate_node",
+            "final_node": "final_node",
+        },
+    )
 
     # human_gate -> execute (或 END 如果需要人工)
     graph.add_conditional_edges(
@@ -82,12 +101,23 @@ def create_coding_graph(checkpointer: MemorySaver | None = None) -> StateGraph:
         },
     )
 
-    # test -> route_decision
+    # test -> reviewer (passes) or fix (fails)
     graph.add_conditional_edges(
         "test_node",
         _test_route,
         {
+            "reviewer_node": "reviewer_node",
             "fix_node": "fix_node",
+            "final_node": "final_node",
+            "__end__": END,
+        },
+    )
+
+    # reviewer -> final
+    graph.add_conditional_edges(
+        "reviewer_node",
+        _reviewer_route,
+        {
             "final_node": "final_node",
         },
     )
@@ -128,6 +158,14 @@ def _s(state: dict[str, Any] | Any) -> dict[str, Any]:
     return {}
 
 
+def _plan_auditor_route(state: dict[str, Any] | Any) -> str:
+    """plan_auditor 后路由: blocked -> final; clean/human_required -> human_gate."""
+    s = _s(state)
+    if s.get("status") == "blocked":
+        return "final_node"
+    return "human_gate_node"
+
+
 def _human_gate_route(state: dict[str, Any] | Any) -> str:
     """human_gate 后路由: rejected/blocked -> final;
     human_required -> 查决策文件 (approved->execute, rejected->final, pending->END);
@@ -153,14 +191,12 @@ def _human_gate_route(state: dict[str, Any] | Any) -> str:
 
 
 def _test_route(state: dict[str, Any] | Any) -> str:
-    """test 后路由: pass -> final; fail + round < max -> 查决策 -> fix/final/END."""
+    """test 后路由: pass -> reviewer; fail + round < max -> 查决策 -> fix/final/END."""
     s = _s(state)
     test_passed = s.get("test_exit_code", -1) == 0
     if test_passed:
-        return "final_node"
+        return "reviewer_node"
 
-    # fix_round = completed fix attempts so far.
-    # Before entering the NEXT fix, read fix-before-round-{fix_round+1}.json.
     fix_round = s.get("fix_round", 0)
     max_fix_rounds = s.get("max_fix_rounds", 3)
     if fix_round >= max_fix_rounds:
@@ -169,29 +205,30 @@ def _test_route(state: dict[str, Any] | Any) -> str:
     next_round = fix_round + 1
     run_dir = s.get("run_dir", "")
 
-    # 1. 全局控制
     control = _read_fix_control(run_dir)
     if not control.valid:
-        return "__end__"         # 损坏控制文件 → 暂停
+        return "__end__"
 
-    # 2. 本轮决策
     d = _read_decision(run_dir, f"fix-before-round-{next_round}")
     if not d.valid:
-        return "__end__"         # 损坏决策文件 → 暂停
+        return "__end__"
 
     if d.status in ("abort", "skip"):
         return "final_node"
     if d.status == "pending":
         return "__end__"
 
-    # 3. supervised 模式或无决策文件 → 检查是否需要暂停
     if control.mode == "supervised" and not d.exists:
         return "__end__"
     if control.pause_before_next_fix and not d.exists:
         return "__end__"
 
-    # 4. 默认: continue 或文件不存在(auto 模式) → 进入 fix_node
     return "fix_node"
+
+
+def _reviewer_route(state: dict[str, Any] | Any) -> str:
+    """reviewer 后路由: 总是进入 final_node (reviewer 内部设置 blocked 状态)."""
+    return "final_node"
 
 
 def _side_effect_route(state: dict[str, Any] | Any) -> str:

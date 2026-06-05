@@ -11,6 +11,7 @@ from typing import Any
 
 from ..config_loader import _hub_dir
 from ..run_store import save_run_file, save_run_json
+from ..run_governance import render_full_governance_md, summarize_run_governance
 
 
 def finalizer_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -35,6 +36,16 @@ def finalizer_node(state: dict[str, Any]) -> dict[str, Any]:
     from datetime import datetime, timezone
     state["status"] = status
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    # --- P0 issue blocking ---
+    from ..issue_ledger import unresolved_p0_count
+    p0_count = unresolved_p0_count(run_dir)
+    if p0_count > 0:
+        status = "blocked"
+        state["status"] = "blocked"
+        state["review_result"] = "blocked"
+        state["human_required"] = True
+        state["error_message"] = f"Reviewer found {p0_count} unresolved P0 issue(s)"
 
     # --- 100% deterministic report — no model calls ---
     report = _generate_deterministic_report(state)
@@ -151,8 +162,14 @@ def _generate_deterministic_report(state: dict[str, Any]) -> str:
 ## SAFETY
 - **Dangerous Change**: {state.get("dangerous_change", False)}
 - **Human Required**: {state.get("human_required", False)}
+- **Safety Overall**: {state.get("safety_overall", "")}
+- **Forbidden Paths Touched**: {state.get("forbidden_paths_touched", [])}
 - **Protected Tests**: {state.get("protected_tests", [])}
 - **Error Message**: {state.get("error_message", "")[:500]}""")
+
+    # RUN / ISSUE GOVERNANCE
+    governance_summary = summarize_run_governance(state.get("run_dir", ""), state=state)
+    sections.append(render_full_governance_md(governance_summary))
 
     # BACKEND
     sections.append(f"""\
@@ -244,6 +261,17 @@ def build_failure_analysis(state: dict[str, Any]) -> str:
     bc_table = _render_backend_calls_full(state.get("backend_calls", {}))
     next_action = _recommend_next_action(state, blocking_node)
 
+    governance_summary = summarize_run_governance(state.get("run_dir", ""), state=state)
+    gov_lines = render_full_governance_md(governance_summary).replace(
+        "## RUN GOVERNANCE",
+        "## Run Governance",
+        1,
+    ).replace(
+        "## ISSUE LEDGER",
+        "## Governance Summary",
+        1,
+    )
+
     return f"""# Failure Analysis
 
 ## Summary
@@ -279,6 +307,8 @@ def build_failure_analysis(state: dict[str, Any]) -> str:
 
 ## Recommended Next Action
 {next_action}
+
+{gov_lines}
 
 ## Evidence Files
 All evidence in: {state.get("run_dir", "")}

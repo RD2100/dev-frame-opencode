@@ -4,7 +4,7 @@ project:
   type: backend
 
 commands:
-  lint: python -m pytest tests/ -x --tb=short 2>&1 || echo "lint: tests failed"
+  lint: "python -m pytest tests/ -x --tb=short"
   unit_test: echo "test ok"
 
 policy:

@@ -38,9 +38,11 @@ def _run_git(repo_path: str, args: list[str], timeout: int = 30) -> tuple[int, s
             cwd=repo_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
     except FileNotFoundError:
         return 1, "", "git command not found"
     except subprocess.TimeoutExpired:

@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -27,10 +28,12 @@ from .config_loader import (
     load_project_workflow_config,
     get_execution_policy,
     get_risk_policy,
+    validate_execution_policy,
     _hub_dir,
 )
 from .model_config import get_model_for_risk
 from .project_registry import list_projects, find_project, validate_project, add_project
+from .run_governance import render_full_governance_cli, summarize_run_governance
 from .task_queue import list_tasks, find_task, add_task
 from .run_store import create_run_dir, save_run_file, save_run_json, list_runs, get_run_report
 from .schemas import WorkflowState
@@ -264,6 +267,60 @@ def run_start(
     _execute_run(project_id, task_id, apply_changes, run_tests)
 
 
+@app.command("go")
+def go_dispatch(
+    task_spec_path: Path = typer.Argument(..., help="SADP TaskSpec JSON/YAML file"),
+    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Override project id"),
+    apply_changes: bool = typer.Option(False, "--apply", help="Override TaskSpec mode and apply changes"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Override TaskSpec mode and force dry-run"),
+    run_tests: bool = typer.Option(False, "--run-tests", help="Execute verification commands in dry-run"),
+):
+    """Dispatch a SADP TaskSpec to the OpenCode-backed workflow."""
+    init_env()
+    spec = _load_task_spec(task_spec_path)
+    from .task_spec_adapter import from_task_spec
+    adapted = from_task_spec(spec)
+
+    pid = project_id or spec.get("project_id") or spec.get("project")
+    if not pid:
+        console.print("[red]TaskSpec missing project_id (or pass --project).[/red]")
+        raise typer.Exit(1)
+
+    mode_apply = adapted.get("mode", "dry-run") == "apply"
+    if apply_changes:
+        mode_apply = True
+    if dry_run:
+        mode_apply = False
+
+    verify_commands = _verification_commands_from_spec(adapted.get("verification", []))
+    _check_verify_deny_conflict(verify_commands, adapted.get("forbidden_files", []))
+
+    task_id = add_task(
+        pid,
+        adapted["title"],
+        adapted.get("description", ""),
+        adapted.get("risk", "medium"),
+        coding_backend="opencode",
+    )
+    console.print(f"[bold]@go dispatch[/bold] TaskSpec -> {task_id} (backend=opencode)")
+
+    result = _execute_run(
+        pid,
+        task_id,
+        apply_changes=mode_apply,
+        run_tests=run_tests,
+        task_allowed_files=adapted.get("allowed_files", []),
+        task_forbidden_files=adapted.get("forbidden_files", []),
+        task_test_commands=verify_commands or None,
+        task_spec=spec,
+    )
+
+    run_dir = result.get("run_dir", "") if result else ""
+    if run_dir:
+        report_path = _write_execution_report(run_dir)
+        console.print(f"[green]ExecutionReport:[/green] {report_path}")
+
+
 @run_app.command("all")
 def run_all(
     risk: Optional[str] = typer.Option(None, "--risk", "-r", help="按风险等级过滤: low | medium | high"),
@@ -351,6 +408,10 @@ def run_show(run_id: str = typer.Option(..., "--run-id", "-r")):
         for node, info in ce_data.get("nodes", {}).items():
             if info.get("called") == False:
                 console.print(f"  {node}: (not called)")
+            elif node == "plan_auditor":
+                console.print(f"  plan_auditor: result={info.get('result','?')} "
+                              f"blocked={info.get('blocked',False)} "
+                              f"human_required={info.get('human_required',False)}")
             else:
                 console.print(f"  {node}: {info.get('backend','?')} exit={info.get('exit_code','?')} "
                               f"model={info.get('effective_model',info.get('requested_model','?'))}")
@@ -363,6 +424,13 @@ def run_show(run_id: str = typer.Option(..., "--run-id", "-r")):
         fp = rd / f
         if fp.exists():
             console.print(f"  [dim]{f}: {fp.stat().st_size} bytes[/dim]")
+
+    try:
+        governance_summary = summarize_run_governance(rd, state=s)
+    except Exception:
+        governance_summary = {"governance": {}}
+    console.print(render_full_governance_cli(governance_summary))
+
 
 
 @run_app.command("prune")
@@ -436,6 +504,10 @@ def run_recover(run_id: str = typer.Option(..., "--run-id", "-r"),
     for s in result['suggestions']:
         console.print(f"  {s}")
 
+    run_governance = result.get("run_governance", {})
+    if run_governance:
+        console.print(render_full_governance_cli(run_governance))
+
 
 @run_app.command("verify")
 def run_verify(run_id: str = typer.Option(..., "--run-id", "-r"),
@@ -452,73 +524,42 @@ def run_verify(run_id: str = typer.Option(..., "--run-id", "-r"),
 
     pid = project_id or found[0].get("project_id", "")
     rd = _hub_dir() / "runs" / pid / run_id
-
-    required = ["state.json", "final-report.md", "safety-report.json",
-                "diff.patch", "test-output.md", "review.md", "review.yaml"]
-    status = "passed"
-    import json as _j
-    sf = rd / "state.json"
-    if sf.exists():
-        s = _j.loads(sf.read_text(encoding="utf-8"))
-        status = s.get("status", "?")
-        if status != "passed":
-            required.append("failure-analysis.md")
-
-    present = [f for f in required if (rd / f).exists()]
-    missing = [f for f in required if f not in present]
-    ok = len(missing) == 0
-
-    # Check final-report consistency
-    fr = rd / "final-report.md"
-    fr_ok = True
-    fr_trusted = True
-    if fr.exists():
-        fr_text = fr.read_text(encoding="utf-8", errors="replace")
-        if "deterministic" in fr_text or "fallback" in fr_text.lower():
-            fr_trusted = False
-        if status == "blocked" and "passed" in fr_text.lower() and "blocked" not in fr_text.lower():
-            fr_ok = False
-        if status == "passed" and "blocked" in fr_text.lower():
-            fr_ok = False
-
-    # Chain evidence
-    ce = rd / "chain-evidence.json"
-    ce_trust = "TRUSTED"
-    if ce.exists():
-        ce_data = json.loads(ce.read_text(encoding="utf-8"))
-        ce_status = ce_data.get("status", "?")
-        if ce_status in ("blocked", "failed"):
-            ce_trust = "NOT_TRUSTED"
-        else:
-            coding_ok = True
-            for node in ["executor", "fixer"]:
-                n = ce_data.get("nodes", {}).get(node, {})
-                be = n.get("backend", "")
-                if be and be not in ("opencode",):
-                    coding_ok = False
-                    console.print(f"[red]CHAIN: {node} backend={be} -- not opencode[/red]")
-            ce_trust = "TRUSTED" if coding_ok else "NOT_TRUSTED"
-
-    ev_ok = len(missing) == 0
-    chain_ok = ce_trust != "NOT_TRUSTED"
+    result = verify_run_evidence(run_id, pid, hub_dir_override=rd.parents[2])
+    present = result.get("evidence_files_present", [])
+    missing = result.get("evidence_files_missing", [])
+    status = result.get("status", "?")
+    ev_ok = result.get("evidence_ok", False)
+    chain_ok = result.get("chain_trusted", False)
+    chain_status = result.get("chain_status", "MISSING")
+    final_report_status = result.get("final_report_status", "MISSING")
     overall = "PASS" if ev_ok and chain_ok else "FAIL"
 
-    console.print(f"[bold]{overall}: {len(present)}/{len(required)} evidence files[/bold]")
+    console.print(f"[bold]{overall}: {len(present)}/{len(present) + len(missing)} evidence files[/bold]")
     if missing:
         console.print(f"[red]Evidence missing: {', '.join(missing)}[/red]")
     else:
         console.print("[green]All evidence present[/green]")
-    console.print(f"[{'green' if chain_ok else 'red'}]Chain evidence: {ce_trust}[/{'green' if chain_ok else 'red'}]")
+    console.print(f"[{'green' if chain_ok else 'red'}]Chain evidence: {chain_status}[/{'green' if chain_ok else 'red'}]")
     console.print(f"[dim]Run status: {status}[/dim]")
-    if missing:
-        console.print(f"[red]Missing: {', '.join(missing)}[/red]")
-    else:
-        console.print("[green]All evidence present[/green]")
     console.print(f"[dim]Run status: {status}[/dim]")
-    if not fr_ok:
+    if not result.get("final_report_consistent", True):
         console.print(f"[red]WARN: final-report inconsistent with state[/red]")
+    if final_report_status == "MISSING":
+        console.print(f"[yellow]WARN: final-report missing[/yellow]")
+
+    run_governance = result.get("run_governance", {})
+    console.print(render_full_governance_cli(run_governance))
+    return
     if not fr_trusted:
         console.print(f"[yellow]WARN: final-report is fallback/local template — trusted_for_status=false[/yellow]")
+
+    # Governance summary (display-only, aligned with final-report)
+    try:
+        from .issue_ledger import ledger_summary, render_governance_lines_cli
+        gov = ledger_summary(str(rd))
+    except Exception:
+        gov = {}
+    console.print(render_governance_lines_cli(gov))
 
 
 @run_app.command("latest")
@@ -531,6 +572,120 @@ def run_latest(project_id: str = typer.Option(..., "--project", "-p")):
         run_show(run_id=runs[0].get("run_id", ""))
     else:
         console.print("[dim]No runs[/dim]")
+
+
+def _load_task_spec(path: Path) -> dict[str, Any]:
+    """Load a SADP TaskSpec from JSON or YAML."""
+    if not path.exists():
+        console.print(f"[red]TaskSpec not found: {path}[/red]")
+        raise typer.Exit(1)
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        data = json.loads(text)
+    else:
+        data = _yaml.safe_load(text)
+    if not isinstance(data, dict):
+        console.print("[red]TaskSpec root must be an object.[/red]")
+        raise typer.Exit(1)
+    return data
+
+
+def _verification_commands_from_spec(verify: list[str]) -> dict[str, str]:
+    """Convert TaskSpec verify list into named shell commands."""
+    commands: dict[str, str] = {}
+    for index, command in enumerate(verify or [], start=1):
+        if isinstance(command, str) and command.strip():
+            commands[f"verify_{index}"] = command.strip()
+    return commands
+
+
+@dataclass
+class VerifyDenyConflict:
+    verify_command_name: str
+    script_path: str
+    derived_candidate: str
+    deny_target: str
+
+
+def _check_verify_deny_conflict(
+    verify_commands: dict[str, str],
+    forbidden_files: list[str],
+) -> None:
+    """Preflight: block dispatch if a verify .py command conflicts with deny_write.
+
+    Deterministic rule (not a shell parser):
+    - Extract .py file paths from verify commands.
+    - For each, derive candidate report-output filenames:
+      * {stem}.txt  (e.g. smoke_test.py -> smoke_test.txt)
+      * {prefix}_report.txt if stem ends with _test (e.g. smoke_test -> smoke_report.txt)
+    - If any candidate matches a forbidden/deny_write file, block before _execute_run.
+    - Emits structured blocked details with stable reason identifier.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    _py_re = _re.compile(r'(\S+\.py)')
+    conflicts: list[VerifyDenyConflict] = []
+
+    for cmd_name, cmd in verify_commands.items():
+        for _m in _py_re.finditer(cmd):
+            py_path = _m.group(1).strip("\"'")
+            stem = _Path(py_path).stem
+
+            candidates = {stem + ".txt"}
+            if stem.endswith("_test"):
+                prefix = stem[:-5]
+                candidates.add(prefix + "_report.txt")
+
+            for forbid in forbidden_files:
+                forbid_stem = _Path(forbid).stem
+                for candidate in candidates:
+                    if _Path(candidate).stem == forbid_stem:
+                        conflicts.append(VerifyDenyConflict(
+                            verify_command_name=cmd_name,
+                            script_path=py_path,
+                            derived_candidate=candidate,
+                            deny_target=forbid,
+                        ))
+
+    if conflicts:
+        console.print(f"[red]BLOCKED: VERIFY_DENY_CONFLICT ({len(conflicts)} conflict(s))[/red]")
+        for c in conflicts:
+            console.print(
+                f"  [red]verify={c.verify_command_name}[/red] "
+                f"script={c.script_path} "
+                f"candidate={c.derived_candidate} "
+                f"deny={c.deny_target}"
+            )
+        raise typer.Exit(69)
+
+
+def _write_execution_report(run_dir: str) -> str:
+    """Write @go ExecutionReport artifacts from run evidence."""
+    from .execution_report_adapter import to_execution_report
+    report = to_execution_report(run_dir)
+    save_run_json(run_dir, "execution-report.json", report)
+    lines = [
+        "# ExecutionReport",
+        "",
+        f"- **Task ID**: {report.get('task_id', '')}",
+        f"- **Status**: {report.get('status', 'unknown')}",
+        f"- **Diff**: {report.get('diff_summary', '')}",
+        f"- **Safety**: {report.get('safety', {}).get('overall', 'unknown')}",
+        f"- **Evidence Trust**: {report.get('evidence_trust', '')}",
+        "",
+        "## Changed Files",
+    ]
+    changed = report.get("changed_files", [])
+    lines.extend(f"- `{path}`" for path in changed) if changed else lines.append("- (none)")
+    lines.extend([
+        "",
+        "## Test Results",
+        "```",
+        str(report.get("test_results", ""))[:2000],
+        "```",
+    ])
+    return save_run_file(run_dir, "execution-report.md", "\n".join(lines))
 
 
 # ============================================================
@@ -934,7 +1089,7 @@ def project_init(
 # issue 命令
 # ============================================================
 
-issue_app = typer.Typer(help="外部 issue 导入")
+issue_app = typer.Typer(help="Issue ledger 管理")
 app.add_typer(issue_app, name="issue")
 
 
@@ -952,6 +1107,183 @@ def issue_import(
         console.print(f"[green]Imported {count} issues[/green]")
     else:
         console.print("[dim]No new issues to import[/dim]")
+
+
+@issue_app.command("list")
+def issue_list():
+    """列出最新 issue 状态（每 recurrence_key 最新一条）."""
+    init_env()
+    from .issue_ledger import _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    if not latest:
+        console.print("[dim]No issues in ledger[/dim]")
+        return
+
+    table = Table(title="Issue Ledger")
+    table.add_column("Recurrence Key", style="cyan")
+    table.add_column("Title")
+    table.add_column("Severity")
+    table.add_column("Status")
+    table.add_column("Source")
+    table.add_column("Run")
+
+    for key in sorted(latest):
+        issue = latest[key]
+        sev = issue.get("severity", "")
+        sev_style = {"P0": "red", "P1": "yellow", "P2": "dim", "P3": "dim"}.get(sev, "")
+        status = issue.get("status", "")
+        status_style = {
+            "open": "red", "fixed": "green", "verified": "green",
+            "wontfix": "dim", "closed": "dim",
+            "accepted_risk": "yellow", "mitigated": "green", "obsolete": "dim",
+        }.get(status, "")
+
+        table.add_row(
+            issue.get("recurrence_key", key),
+            (issue.get("title") or "")[:60],
+            f"[{sev_style}]{sev}[/{sev_style}]" if sev_style else sev,
+            f"[{status_style}]{status}[/{status_style}]" if status_style else status,
+            issue.get("source", ""),
+            (issue.get("run_id") or "")[-16:],
+        )
+
+    console.print(table)
+
+
+@issue_app.command("verify")
+def issue_verify(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to verify"),
+):
+    """验证一个 issue，追加 verified 记录."""
+    init_env()
+    from .issue_ledger import mark_verified, _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    existing = latest.get(recurrence_key)
+    title = existing.get("title", "") if existing else ""
+
+    mark_verified(recurrence_key, verification="CLI verified", title=title)
+    console.print(f"[green]Verified: {recurrence_key}[/green]")
+
+
+@issue_app.command("close")
+def issue_close(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to close"),
+    human_override: bool = typer.Option(
+        False, "--human-override",
+        help="Explicit human override (P0 wontfix stops blocking with this flag)",
+    ),
+):
+    """关闭一个 issue (wontfix)."""
+    init_env()
+    from .issue_ledger import mark_wontfix, _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    existing = latest.get(recurrence_key)
+    title = existing.get("title", "") if existing else ""
+
+    mark_wontfix(recurrence_key, human_override=human_override, title=title)
+    override_str = " [human_override]" if human_override else ""
+    console.print(f"[yellow]Closed (wontfix): {recurrence_key}{override_str}[/yellow]")
+
+
+@issue_app.command("reopen")
+def issue_reopen(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to reopen"),
+):
+    """重新打开一个 issue."""
+    init_env()
+    from .issue_ledger import mark_reopen
+
+    mark_reopen(recurrence_key)
+    console.print(f"[green]Reopened: {recurrence_key}[/green]")
+
+
+@issue_app.command("accept-risk")
+def issue_accept_risk(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to mark as accepted risk"),
+):
+    """标记 issue 为 accepted risk (已接受风险)."""
+    init_env()
+    from .issue_ledger import mark_accepted_risk, _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    existing = latest.get(recurrence_key)
+    title = existing.get("title", "") if existing else ""
+
+    mark_accepted_risk(recurrence_key, title=title)
+    console.print(f"[yellow]Accepted risk: {recurrence_key}[/yellow]")
+
+
+@issue_app.command("mitigate")
+def issue_mitigate(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to mark as mitigated"),
+):
+    """标记 issue 为 mitigated (已缓解)."""
+    init_env()
+    from .issue_ledger import mark_mitigated, _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    existing = latest.get(recurrence_key)
+    title = existing.get("title", "") if existing else ""
+
+    mark_mitigated(recurrence_key, title=title)
+    console.print(f"[green]Mitigated: {recurrence_key}[/green]")
+
+
+@issue_app.command("obsolete")
+def issue_obsolete(
+    recurrence_key: str = typer.Argument(..., help="Recurrence key to mark as obsolete"),
+):
+    """标记 issue 为 obsolete (已过时)."""
+    init_env()
+    from .issue_ledger import mark_obsolete, _get_latest_by_key
+
+    latest = _get_latest_by_key()
+    existing = latest.get(recurrence_key)
+    title = existing.get("title", "") if existing else ""
+
+    mark_obsolete(recurrence_key, title=title)
+    console.print(f"[dim]Obsoleted: {recurrence_key}[/dim]")
+
+
+# ============================================================
+# governance 命令 (read-only matrix summary)
+# ============================================================
+
+gov_app = typer.Typer(help="Governance matrix (read-only)")
+app.add_typer(gov_app, name="governance")
+
+
+VALID_GOVERNANCE_MATRIX_FORMATS = ("panel", "markdown", "json", "snapshot")
+
+
+@gov_app.command("matrix")
+def governance_matrix_cmd(
+    format: str = typer.Option(
+        "panel", "--format", "-f",
+        help="Output format: panel (default), markdown, json, or snapshot",
+    ),
+):
+    """Display the governance coverage matrix summary (read-only, deterministic)."""
+    init_env()
+    if format not in VALID_GOVERNANCE_MATRIX_FORMATS:
+        supported = ", ".join(VALID_GOVERNANCE_MATRIX_FORMATS)
+        console.print(f"[red]Invalid format: '{format}'. Supported: {supported}[/red]")
+        raise typer.Exit(1)
+    if format == "json":
+        from .governance_matrix import build_governance_matrix_json
+        console.print(build_governance_matrix_json(), markup=False, soft_wrap=True)
+    elif format == "markdown":
+        from .governance_matrix import build_governance_matrix_markdown
+        console.print(build_governance_matrix_markdown(), markup=False, soft_wrap=True)
+    elif format == "snapshot":
+        from .governance_matrix import build_governance_matrix_snapshot
+        console.print(build_governance_matrix_snapshot(), markup=False, soft_wrap=True)
+    else:
+        from .governance_matrix import build_governance_matrix_panel
+        console.print(build_governance_matrix_panel())
 
 
 # ============================================================
@@ -1710,6 +2042,14 @@ def doctor(strict: bool = typer.Option(False, "--strict", help="生产就绪检�
         exists = (_hub_dir() / config_file).exists()
         checks.append((f"Config: {config_file}", exists, "found" if exists else "missing"))
 
+    # M4-A3: 执行策略正则模式验证
+    invalid_patterns = validate_execution_policy()
+    if invalid_patterns:
+        for item in invalid_patterns:
+            checks.append((f"Policy regex: {item['pattern']}", False, f"invalid — {item['error']}"))
+    else:
+        checks.append(("Execution policy regex", True, "all valid"))
+
     # 输出
     all_ok = True
     for name, ok, detail in checks:
@@ -1724,6 +2064,9 @@ def doctor(strict: bool = typer.Option(False, "--strict", help="生产就绪检�
     else:
         console.print("[yellow]部分检查未通过，请安装缺失依赖或设置环境变量[/yellow]")
 
+    if strict and not all_ok:
+        raise typer.Exit(1)
+
 
 # ============================================================
 # 核心执行逻辑
@@ -1731,7 +2074,9 @@ def doctor(strict: bool = typer.Option(False, "--strict", help="生产就绪检�
 
 def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: bool = False,
                  task_allowed_files: list[str] | None = None,
-                 task_forbidden_files: list[str] | None = None) -> None:
+                 task_forbidden_files: list[str] | None = None,
+                 task_test_commands: dict[str, str] | None = None,
+                 task_spec: dict[str, Any] | None = None) -> dict[str, Any]:
     """执行一次完整的 workflow run (带 checkpointer)."""
     # 1. 加载项目
     project = find_project(project_id)
@@ -1865,7 +2210,8 @@ def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: 
         executor_model=executor_model,
         fixer_model=fixer_model,
         constraints=constraints,
-        test_commands=project_config.get("commands", {}),
+        test_commands=task_test_commands if task_test_commands is not None
+        else project_config.get("commands", {}),
         allowed_files=task_allowed_files if task_allowed_files is not None else [],
         forbidden_files=_resolve_boundary(
             task_forbidden_files if task_forbidden_files is not None
@@ -1879,6 +2225,8 @@ def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: 
     # 10. 保存初始状态
     save_run_file(run_dir, "input-task.md", f"# Task: {task['title']}\n\n{task['description']}")
     save_run_file(run_dir, "project-config.yaml", json.dumps(project_config, indent=2, ensure_ascii=False))
+    if task_spec is not None:
+        save_run_json(run_dir, "task-spec.json", task_spec)
     save_run_json(run_dir, "state.json", state.model_dump())
 
     # 11. 显示信息
@@ -1897,13 +2245,24 @@ def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: 
     console.print(f"Thread: {run_id}")
     console.print(f"Run dir: {run_dir}")
 
+    state_dict = state.model_dump()
+
+    # Load issue ledger prompt context
+    try:
+        from .issue_ledger import build_prompt_context
+        ledger_ctx = build_prompt_context()
+        if ledger_ctx:
+            state_dict["ledger_prompt_context"] = ledger_ctx
+            save_run_json(run_dir, "state.json", state_dict)
+            console.print(f"[dim]Ledger: {len(ledger_ctx.splitlines())} lines of known issues[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]Ledger context unavailable: {e}[/yellow]")
+
     # 12. 执行 LangGraph 工作流 (带 checkpointer)
     console.print("\n[bold]执行工作流...[/bold]\n")
 
     from .workflows.coding_graph import compile_graph
     app_graph = compile_graph(thread_id=run_id)
-
-    state_dict = state.model_dump()
 
     # Trace marker: persist diagnostic snapshot before workflow starts
     _write_trace(run_dir, last_node="", last_event="workflow_started",
@@ -1984,6 +2343,24 @@ def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: 
     # Chain evidence
     _write_chain_evidence(run_dir, final_state)
 
+    # Evidence verification
+    _evidence_result = verify_run_evidence(run_id, project_id)
+    final_state["evidence_verified"] = _evidence_result
+    if not _evidence_result["evidence_ok"] or not _evidence_result["chain_trusted"]:
+        console.print(f"[yellow]Evidence incomplete: {_evidence_result.get('reasons', [])}[/yellow]")
+    save_run_json(run_dir, "state.json", final_state)
+
+    # Derive and merge issue ledger delta
+    try:
+        from .issue_ledger import derive_issues_from_state, write_run_delta, merge_delta
+        run_issues = derive_issues_from_state(final_state)
+        if run_issues:
+            write_run_delta(run_dir, run_issues)
+            merge_result = merge_delta({"issues": run_issues}, run_id)
+            console.print(f"[dim]Ledger: {merge_result['merged']} issues recorded[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]Ledger update failed: {e}[/yellow]")
+
     # 如果 human_gate 结束但 finalizer 没走到，补生成 final-report
     final_report_path = Path(run_dir) / "final-report.md"
     if not final_report_path.exists() and status in ("human_required", "blocked", "failed"):
@@ -2003,6 +2380,8 @@ def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: 
         console.print(f"\n[yellow]Human gate required. 查看: {run_dir}/human-gate.md[/yellow]")
         console.print(f"[dim]当前运行已通过 checkpointer 保存 (thread_id={run_id})[/dim]")
         console.print(f"[dim]审批后，重新运行 aihub run start --apply 继续[/dim]")
+
+    return {"run_id": run_id, "run_dir": run_dir, "status": status}
 
 
 def _cleanup_isolation(project_path: str, worktree_path: str, ai_branch: str,
@@ -2162,67 +2541,42 @@ def _write_trace(run_dir: str, *, last_node: str, last_event: str,
     trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def verify_run_evidence(run_id: str, project_id: str) -> dict:
+def verify_run_evidence(run_id: str, project_id: str, hub_dir_override: Path | None = None) -> dict:
     """共享函数：run verify 三态判定。run verify CLI 和 goal_runner 共用."""
-    import json as _j, os as _os
-    from .config_loader import _hub_dir
-    rd = _hub_dir() / "runs" / project_id / run_id
+    if hub_dir_override is None:
+        from .config_loader import _hub_dir as _config_hub_dir
+        hub_dir = _config_hub_dir()
+    else:
+        hub_dir = Path(hub_dir_override)
+    rd = hub_dir / "runs" / project_id / run_id
     if not rd.exists():
         return {"evidence_ok": False, "chain_trusted": False, "final_report_consistent": False,
                 "status": "unknown", "reasons": ["run directory not found"]}
-
-    required = ["state.json", "final-report.md", "safety-report.json",
-                "diff.patch", "test-output.md", "review.md", "review.yaml"]
-    evidence_ok = all((rd / f).exists() for f in required)
-
-    ce = rd / "chain-evidence.json"
-    chain_trusted = False
-    if ce.exists():
-        ce_data = _j.loads(ce.read_text(encoding="utf-8"))
-        chain_trusted = ce_data.get("status") not in ("blocked", "failed")
-
-    sf = rd / "state.json"
-    run_status = "unknown"
-    fr_consistent = True
-    if sf.exists():
-        s = _j.loads(sf.read_text(encoding="utf-8"))
-        run_status = s.get("status", "unknown")
-
-    fr = rd / "final-report.md"
-    if fr.exists():
-        fr_text = fr.read_text(encoding="utf-8", errors="replace").lower()
-        if run_status == "blocked" and "passed" in fr_text and "blocked" not in fr_text:
-            fr_consistent = False
-
-    # Build detailed result
-    present = [f for f in required if (rd / f).exists()]
-    missing = [f for f in required if f not in present]
-    if run_status != "passed" and "failure-analysis.md" not in required:
-        if (rd / "failure-analysis.md").exists():
-            present.append("failure-analysis.md")
-        else:
-            missing.append("failure-analysis.md")
-
+    run_governance = summarize_run_governance(rd)
+    missing = run_governance.get("missing_files", [])
     reasons = []
-    if not evidence_ok:
+    if not run_governance.get("evidence_ok", False):
         reasons.append(f"evidence missing: {', '.join(missing)}")
-    if not chain_trusted:
-        reasons.append(f"chain NOT_TRUSTED (status={run_status})")
-    if not fr_consistent:
+    if not run_governance.get("chain_trusted", False):
+        reasons.append(
+            f"chain {run_governance.get('chain_status', 'MISSING')} "
+            f"(status={run_governance.get('run_status', 'unknown')})"
+        )
+    if not run_governance.get("final_report_consistent", False):
         reasons.append("final report inconsistent with state.status")
-    if evidence_ok and chain_trusted and fr_consistent:
-        pass  # no reasons needed
 
     return {
-        "evidence_ok": evidence_ok,
-        "chain_trusted": chain_trusted,
-        "final_report_consistent": fr_consistent,
-        "status": run_status,
+        "evidence_ok": run_governance.get("evidence_ok", False),
+        "chain_trusted": run_governance.get("chain_trusted", False),
+        "final_report_consistent": run_governance.get("final_report_consistent", False),
+        "status": run_governance.get("run_status", "unknown"),
         "reasons": reasons,
-        "evidence_files_present": present,
+        "evidence_files_present": run_governance.get("present_files", []),
         "evidence_files_missing": missing,
-        "chain_status": "TRUSTED" if chain_trusted else ("NOT_TRUSTED" if ce.exists() else "MISSING"),
-        "final_report_status": "CONSISTENT" if fr_consistent else "INCONSISTENT" if (rd / "final-report.md").exists() else "MISSING",
+        "chain_status": run_governance.get("chain_status", "MISSING"),
+        "final_report_status": run_governance.get("final_report_status", "MISSING"),
+        "governance": run_governance.get("governance", {}),
+        "run_governance": run_governance,
     }
 
 
@@ -2265,6 +2619,15 @@ def _write_chain_evidence(run_dir: str, state: dict) -> None:
             except Exception:
                 pass
         evidence["nodes"][node] = entry
+
+    plan_audit_result = state.get("plan_audit_result")
+    if plan_audit_result:
+        evidence["nodes"]["plan_auditor"] = {
+            "called": True,
+            "result": plan_audit_result,
+            "blocked": plan_audit_result == "blocked",
+            "human_required": plan_audit_result == "human_required",
+        }
 
     Path(run_dir, "chain-evidence.json").write_text(
         _j.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -16,6 +16,7 @@ from typing import Any
 from ..config_loader import _hub_dir
 from ..run_store import save_run_file
 from ..git_utils import collect_all_diff_info, save_diff_patch
+from .evidence import collect_safety_evidence
 
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
@@ -50,6 +51,17 @@ def build_executor_prompt(state: dict[str, Any]) -> str:
     if wf:
         result += "\n\n## Project Workflow Rules\n" + wf
 
+    # 注入 Issue Ledger 上下文
+    ledger_ctx = state.get("ledger_prompt_context", "")
+    if ledger_ctx:
+        result += "\n\n" + ledger_ctx
+    result += (
+        "\n\n## Agent Issue Ledger Output\n"
+        f"If you discover implementation issues, write JSON to `{state.get('run_dir', '')}/coding-issues.json` "
+        "using {\"issues\":[{\"severity\":\"P2\",\"category\":\"...\",\"title\":\"...\","
+        "\"next_prompt_hint\":\"...\"}]}."
+    )
+
     return result
 
 
@@ -74,7 +86,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
     prompt = build_executor_prompt(state)
     save_run_file(run_dir, "executor-prompt.md", prompt)
 
-    if dry_run and not apply_changes:
+    if not apply_changes:
         # ---------- dry-run: 不调用 OpenCode ----------
         would_change = _generate_would_change_report(allowed_files, forbidden_files, state)
         save_run_file(run_dir, "execution-log.md", would_change)
@@ -121,6 +133,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
     changed_files = diff_info["changed_files"]
     name_status = diff_info["name_status"]
     diff_line_count = diff_info["diff_line_count"]
+    safety_evidence = collect_safety_evidence(state, cwd, diff_info)
 
     save_diff_patch(cwd, str(Path(run_dir) / "diff.patch"))
 
@@ -143,6 +156,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
         log_content = f"# Execution Log\n\n## Mode\napply (TIMEOUT {duration}s)\n\n## Error\n{clean_stderr[:500]}\n"
         save_run_file(run_dir, "execution-log.md", log_content)
         return {
+            **safety_evidence,
             "execution_log": execution_log,
             "git_diff": git_diff, "changed_files": changed_files,
             "changed_files_status": name_status, "diff_line_count": diff_line_count,
@@ -158,6 +172,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
         log_content = f"# Execution Log\n\n## Mode\napply (FAILED)\n\n## Error\n{clean_stderr[:500]}\n\n## Output\n{execution_log[:500]}\n"
         save_run_file(run_dir, "execution-log.md", log_content)
         return {
+            **safety_evidence,
             "execution_log": execution_log,
             "git_diff": git_diff, "changed_files": changed_files,
             "changed_files_status": name_status, "diff_line_count": diff_line_count,
@@ -174,6 +189,7 @@ def executor_node(state: dict[str, Any]) -> dict[str, Any]:
         "changed_files_status": name_status, "diff_line_count": diff_line_count,
         "error_message": "",
         "backend_calls": be,
+        **safety_evidence,
     }
 
 

@@ -1,7 +1,7 @@
 ================================================================================
   SMOKE TEST REPORT
 ================================================================================
-  Timestamp : 2026-05-31 00:36:23 中国标准时间
+  Timestamp : 2026-06-05 12:47:05 中国标准时间
   Host      : DESKTOP-KJTQVQB
   OS        : Windows 10 (10.0.19045)
   Python    : 3.10.11
@@ -9,44 +9,73 @@
 --------------------------------------------------------------------------------
   #    Command                                  Exit   Status           Duration     Key Output
   ---- ---------------------------------------- ------ ---------------- ------------ ------------------------------
-  1    CodeGraph type-check                     0      PASS             2370ms       0 errors
-  2    ai-workflow-hub core state tests (OpenCode) 0      PASS             4880ms       46 passed, 1 skipped in 3.78s
-  3    ai-workflow-hub-e2e evidence + gate tests 0      PASS             2743ms       216 passed in 1.72s
+  0    Documentation staleness check            0      PASS             69ms         0 errors
+  1    Readiness score diagnostic               0      PASS             286ms        0 errors
+  2    CodeGraph type-check                     0      PASS             2171ms       0 errors
+  3    ai-workflow-hub core state tests (OpenCode) 0      PASS             39954ms      532 passed, 1 skipped in 38.42s
+  4    ai-workflow-hub-e2e evidence + gate tests 0      PASS             2518ms       216 passed in 1.65s
 --------------------------------------------------------------------------------
-  Summary : 3 passed, 0 known issues, 0 failed
+  Summary : 5 passed, 0 known issues, 0 failed
   Verdict : PASS
 ================================================================================
 
---- Command 1: CodeGraph type-check ---
+--- Command 0: Documentation staleness check ---
+  CWD       : D:\dev-frame-opencode
+  CMD       : python -c import subprocess, sys; stale = ['172/172', '172 tests', '172 passed', '~900 tests', '77 core tests', '175 evidence tests', '31 core + 168 e2e']; docs = ['AGENTS.md', 'CLAUDE.md', 'PROJECT_STATE.md', 'HEALTH_REPORT.md', 'RUNBOOK.md', 'PRODUCTION_READINESS_SUMMARY.md', 'RELEASE_CRITERIA.md', 'PRODUCTION_READINESS_CHECKLIST.md', 'PRODUCTION_READINESS_GAPS.md']; found = []; [found.append(f'{d}:{p}') for d in docs for p in stale  if __import__('pathlib').Path(d).exists() and p in __import__('pathlib').Path(d).read_text(encoding='utf-8', errors='replace')]; print(f'STALE: {", ".join(found)}' if found else 'CLEAN: 0 stale patterns'); sys.exit(1 if found else 0)
+  Exit Code : 0
+  Duration  : 69ms
+  Status    : PASS
+  stdout (last 10):
+    | CLEAN: 0 stale patterns
+
+--- Command 1: Readiness score diagnostic ---
+  CWD       : D:\dev-frame-opencode
+  CMD       : python tools/readiness_score.py
+  Exit Code : 0
+  Duration  : 286ms
+  Status    : PASS
+  stdout (last 10):
+    |   Test Health: 0.80 — 4/5 smoke commands PASS
+    |   Evidence Integrity: 1.00 — latest pack (p15-driver-disposition): passed
+    |   Route-Ledger Consistency: 1.00 — 22 accepted / 25 ledger entries, production promoted, broader chain unblocked, blocked consistent
+    |   Submission Safety: 1.00 — 31/31 submissions successful
+    |   Stale Documentation Risk: 1.00 — staleness check PASS: 0 stale patterns
+    |   Broader Real-Chain Coverage: 1.00 — broader real-chain testing unblocked (P12 authorized)
+    |   Rollback Readiness: 1.00 — ROLLBACK_PLAN.md exists (723 bytes)
+    |   Monitoring Readiness: 1.00 — MONITORING_PLAN.md exists (477 bytes)
+    |   Human Override Readiness: 1.00 — HUMAN_OVERRIDE_PROTOCOL.md exists (654 bytes)
+    |   Open Gap Count: 0.50 — P0≈2, P1≈2, P2≈1 open
+
+--- Command 2: CodeGraph type-check ---
   CWD       : D:\dev-frame-opencode\codegraph
   CMD       : npx.cmd tsc --noEmit
   Exit Code : 0
-  Duration  : 2370ms
+  Duration  : 2171ms
   Status    : PASS
 
---- Command 2: ai-workflow-hub core state tests (OpenCode) ---
+--- Command 3: ai-workflow-hub core state tests (OpenCode) ---
   CWD       : D:\dev-frame-opencode\ai-workflow-hub
   CMD       : python -m pytest tests/ --ignore=tests/test_e2e_pipeline.py -v --tb=line
   Exit Code : 0
-  Duration  : 4880ms
+  Duration  : 39954ms
   Status    : PASS
   stdout (last 10):
-    | tests/test_path_boundary.py::TestPathBoundaryValidation::test_empty_paths PASSED [ 82%]
-    | tests/test_path_boundary.py::TestPathBoundaryValidation::test_worktree_path_stays_under_project_parent PASSED [ 84%]
-    | tests/test_stage3b_idempotency.py::TestFixerErrorStatus::test_fixer_sets_failed_on_nonzero_exit PASSED [ 86%]
-    | tests/test_stage3b_idempotency.py::TestFixerErrorStatus::test_fixer_sets_failed_on_timeout PASSED [ 89%]
-    | tests/test_stage3b_idempotency.py::TestFixerErrorStatus::test_fixer_no_status_on_success PASSED [ 91%]
-    | tests/test_stage3b_idempotency.py::TestGoalBatchSkip::test_skips_passed_batch PASSED [ 93%]
-    | tests/test_stage3b_idempotency.py::TestGoalBatchSkip::test_skips_running_batch PASSED [ 95%]
-    | tests/test_stage3b_idempotency.py::TestGoalBatchSkip::test_skips_human_required_batch PASSED [ 97%]
-    | tests/test_stage3b_idempotency.py::TestGoalBatchSkip::test_executes_new_or_failed_batch PASSED [100%]
-    | ======================== 46 passed, 1 skipped in 3.78s ========================
+    | tests/test_submission_integration.py::test_gate_blocks_max_retries PASSED [ 98%]
+    | tests/test_submission_integration.py::test_entrypoint_logs_success PASSED [ 98%]
+    | tests/test_submission_integration.py::test_entrypoint_logs_failure PASSED [ 98%]
+    | tests/test_submission_integration.py::test_entrypoint_handles_write_failure PASSED [ 99%]
+    | tests/test_submission_integration.py::test_gate_different_rid_independent PASSED [ 99%]
+    | tests/test_submission_integration.py::test_log_write_failure_causes_exit PASSED [ 99%]
+    | tests/test_submission_integration.py::test_gate_blocks_unwritable_log_dir PASSED [ 99%]
+    | tests/test_submission_integration.py::test_gate_allows_after_cooldown_expires PASSED [ 99%]
+    | tests/test_submission_integration.py::test_failed_entrypoint_write_is_detectable PASSED [100%]
+    | ======================= 532 passed, 1 skipped in 38.42s =======================
 
---- Command 3: ai-workflow-hub-e2e evidence + gate tests ---
+--- Command 4: ai-workflow-hub-e2e evidence + gate tests ---
   CWD       : D:\dev-frame-opencode\ai-workflow-hub-e2e
   CMD       : python -m pytest tests/fittrack/ tests/test_gate.py tests/test_sha256.py -v --tb=line
   Exit Code : 0
-  Duration  : 2743ms
+  Duration  : 2518ms
   Status    : PASS
   stdout (last 10):
     | tests/test_gate.py::TestLoadGateConfig::test_load_release_returns_rules PASSED [ 96%]
@@ -58,5 +87,5 @@
     | tests/test_sha256.py::TestSHA256Integrity::test_directory_path_returns_none PASSED [ 99%]
     | tests/test_sha256.py::TestSHA256Integrity::test_deterministic PASSED     [ 99%]
     | tests/test_sha256.py::TestSHA256Integrity::test_large_file PASSED        [100%]
-    | ============================= 216 passed in 1.72s =============================
+    | ============================= 216 passed in 1.65s =============================
 

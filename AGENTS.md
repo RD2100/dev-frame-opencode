@@ -1,59 +1,79 @@
-# AGENTS.md -- dev-frame-opencode
+# AGENTS.md — dev-frame-opencode / agent-acceptance
 
-> Canonical root: D:\dev-frame-opencode
-> Phase: M1 完成，M2 待定义
-> Runtime: RD2100 Agent Runtime v2 (D:\agent-acceptance)
-> Generated: 2026-05-30
+> Generated: 2026-06-05 | Git: master
+> Status: PRODUCTION PROMOTED
 
-## Quick Start
+## 项目状态
 
-1. [CLAUDE.md](CLAUDE.md) -- 项目概述、健康状态、烟雾测试
-2. [smoke_report.txt](smoke_report.txt) -- 最新烟雾测试报告
-3. Memory: `C:\Users\RD\.claude\projects\D--dev-frame-opencode\memory\`
+**PRODUCTION PROMOTED** — 3/5 blocked items 已授权解锁，2 个永久保护。
 
-## Sub-Projects
+## 已完成 Goals（全部 GPT accepted）
 
-| 项目 | 路径 | 验证 |
-|------|------|------|
-| codegraph | `codegraph/` | `npx tsc --noEmit` |
-| ai-workflow-hub | `ai-workflow-hub/` | `pytest tests/` (77) |
-| ai-workflow-hub-e2e | `ai-workflow-hub-e2e/` | `pytest tests/fittrack/ tests/test_gate.py tests/test_sha256.py` (175) |
+| # | Goal | 状态 |
+|---|------|------|
+| 1 | bounded guarded review pipeline | CLOSED |
+| 2 | Claude/Codex interchangeable peer orchestrators | ACCEPTED |
+| 3 | limited broader real-chain execution (680 tests: 464 core + 216 e2e) | ACCEPTED |
+| 4 | Runbook/Monitoring/Ledger hardening | ACCEPTED |
+| 5 | Production Readiness Preparation | ACCEPTED |
+| 6 | Goal Execution Automation Hardening | ACCEPTED |
+| 7 | Claude Continuity Hardening | ACCEPTED |
 
-## Development Process: SADP
+## Blocked Items（仅剩 2 个永久保护）
 
-This project uses the [Sub-Agent Dispatch Protocol](D:\agent-acceptance\docs\agent-runtime\sub-agent-dispatch-protocol.md):
-
-- **@go [description]**: Create TaskSpec → dispatch → execute → ExecutionReport
-- **@next**: Evaluate gate, generate next TaskSpec
-- **@done**: Mark complete, prompt next goal
-- **@review**: Output Reviewer Index
-
-## Hard Stops (P0)
-
-| # | Rule | Source |
-|---|------|--------|
-| 1 | No destructive git without human approval | RD2100 core-001 |
-| 2 | No secrets in code, logs, or reports | RD2100 sec-001 |
-| 3 | No command injection or path traversal | RD2100 sec-002, sec-003 |
-| 4 | No fake green (FAILED/BLOCKED != PASS) | RD2100 review-001 |
-| 5 | No write outside approved scope | RD2100 core-005 |
-| 6 | Verify with `python smoke_test.py` before declaring health | project-local |
-
-## Document Map
-
-```
-.aiworkflow/session/current.json      <- Current session state
-memory/                                <- Project memory (persistent)
-docs/                                  <- PRD, MVP plan, process log
-CLAUDE.md                              <- Project overview + governance history
-smoke_test.py                          <- Cross-project smoke runner
-smoke_report.txt                       <- Latest smoke output
+```json
+{
+  "production_promotion_approved": true,
+  "broader_real_chain_testing_unblocked": true,
+  "hardcoded_driver_replacement_approved": true,
+  "guard_removal_approved": false,
+  "evidence_cleanup_approved": false
+}
 ```
 
-## Runtime Governance
+## 关键文件
 
-RD2100 Agent Runtime is active at `D:\agent-acceptance\`. The governance hook
-(`pre-edit.governance.ps1`) fires globally via `settings.json`.
+| 文件 | 用途 |
+|------|------|
+| RUNBOOK.md | 操作系统规范 |
+| PROJECT_STATE.md | 项目状态 |
+| CURRENT_ROUTE.json | 当前路由（所有 blocked false） |
+| DECISION_LEDGER.jsonl | 关键决策记录 |
+| TRANSITION_LOG.jsonl | 阶段流转日志 |
+| HEALTH_REPORT.md | 健康报告 |
+| FAILURE_MODE_MATRIX.md | 失败模式矩阵 |
+| PRODUCTION_READINESS_CHECKLIST.md | 生产准备检查清单 |
+| PRODUCTION_RISK_MATRIX.md | 生产风险矩阵 |
+| ROLLBACK_PLAN.md | 回滚计划 |
+| MONITORING_PLAN.md | 监控计划 |
+| RELEASE_CRITERIA.md | 发布条件 |
+| HUMAN_OVERRIDE_PROTOCOL.md | 人工介入协议 |
+| FAILURE_RESPONSE_RUNBOOK.md | 失败响应手册 |
+| PRODUCTION_READINESS_GAPS.md | 生产准备差距 |
+| PRODUCTION_READINESS_SUMMARY.md | 生产准备总结 |
+| tools/AUTHORIZED_GPT_CONVERSATION.json | 授权 GPT 对话绑定 |
+| tools/gpt_conversation_guard.py | GPT 对话授权 guard |
 
-Full rules: `D:\agent-acceptance\docs\agent-runtime\`
-Capability inventory: `D:\agent-acceptance\docs\agent-runtime\capability-inventory.md`
+## 操作规范（RUNBOOK.md 规则）
+
+1. **脚本文件**: 多步骤阶段必须使用 `tools/_*.py` 脚本文件，禁止长 inline bash
+2. **自动轮询**: CDP 提交后 60s 延迟，最多 3 次重试，验证 exact REVIEW_RUN_ID
+3. **自动链式**: accepted review → persist → verify POST_REVIEW_ROUTE → auto-chain
+4. **标准流水线**: authorize → execute → submit → poll → persist → chain/close
+5. **停止规则**: review_unverified / blocked / human_required / RID mismatch → stop
+
+## 下一步建议
+
+1. Guard Policy Reassessment（P16，guard_removal 仍 blocked）
+2. Evidence Archive Maintenance（P17，evidence_cleanup 仍 blocked）
+3. Broader Real-Chain Full Testing（已解锁，可扩展）
+
+## 证据目录
+
+```
+_reports/conversation-authorization/
+  claude-continuity-hardening-probe-v1/          # 连续性验证完成
+  production-readiness-preparation-execution-v1/ # 生产准备完成
+  runbook-monitoring-ledger-hardening-execution-v1/ # 文档巩固完成
+  limited-broader-real-chain-execution-v1/       # 限执行完成
+```

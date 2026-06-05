@@ -1,11 +1,16 @@
-﻿"""Goal runner v1.1 鈥?batch-first execution with boundary checks."""
+﻿"""Goal runner v1.2 -- batch-first execution with boundary checks.
+
+S3 Phase 2: Oracle gate integration -- batch execution is gated by
+FLOW_OUTCOME.json. If the Oracle gate is blocked or human_required,
+batch dispatch is suppressed.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .goal_store import (
     load_goal, update_batch_status, update_goal_status,
@@ -20,10 +25,51 @@ _logger = logging.getLogger(__name__)
 _SKIP_BATCH_STATUSES = frozenset({"passed", "running", "human_required"})
 
 
-def run_goal(goal_id: str, project_id: str, backend: str = "opencode") -> dict[str, Any]:
+def run_goal(
+    goal_id: str,
+    project_id: str,
+    backend: str = "opencode",
+    flow_outcome_path: Optional[Path] = None,
+) -> dict[str, Any]:
     g = load_goal(goal_id)
     if not g:
         return {"error": f"Goal not found: {goal_id}"}
+
+    # -- Oracle gate check (S3 Phase 2) --
+    # Must happen BEFORE any batch execution or status changes.
+    gate_result = None
+    try:
+        from .oracle_gate import check_oracle_gate
+        gate_result = check_oracle_gate(flow_outcome_path)
+    except Exception as e:
+        _logger.warning("goal_runner: oracle gate check failed: %s", e)
+
+    if gate_result and not gate_result.allowed:
+        update_goal_status(goal_id, "blocked")
+        if gate_result.business_decision == "human_required" or gate_result.dispatch_status == "manual_confirm_required":
+            update_goal_status(goal_id, "human_required")
+            return {
+                "error": "Oracle gate: human_required -- manual confirm required",
+                "goal_id": goal_id,
+                "oracle_gate": {
+                    "allowed": False,
+                    "business_decision": gate_result.business_decision,
+                    "dispatch_status": gate_result.dispatch_status,
+                    "reason": gate_result.reason,
+                },
+                "dispatch_blocked_by_oracle": True,
+            }
+        return {
+            "error": f"Oracle gate blocked: {gate_result.reason}",
+            "goal_id": goal_id,
+            "oracle_gate": {
+                "allowed": False,
+                "business_decision": gate_result.business_decision,
+                "dispatch_status": gate_result.dispatch_status,
+                "reason": gate_result.reason,
+            },
+            "dispatch_blocked_by_oracle": True,
+        }
 
     update_goal_status(goal_id, "running")
     batches = g.get("batches", [])

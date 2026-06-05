@@ -108,6 +108,14 @@ class WorkflowState(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+    # --- Plan Auditor (M4-B1) ---
+    plan_audit_passed: bool = False
+    plan_audit_result: str = ""  # clean | blocked | human_required
+    plan_audit_issues: list[dict[str, Any]] = Field(default_factory=list)
+
+    # --- Agent Issue Ledger ---
+    ledger_prompt_context: str = ""
+
 
 class ReviewVerdict(BaseModel):
     """复审裁定结构."""

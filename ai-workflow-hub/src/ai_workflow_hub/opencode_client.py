@@ -35,26 +35,51 @@ def _find_opencode() -> str | None:
     global _opencode_path
     if _opencode_path is not None:
         return _opencode_path
+
+    is_windows = os.name == "nt"
     candidates = [
-        "opencode",
+        r"D:\Tools\npm_pack\opencode",
         os.path.expanduser("~/.local/bin/opencode"),
         os.path.expanduser("~/bin/opencode"),
         os.path.expanduser("~/npm_pack/opencode"),
-        r"D:\Tools\npm_pack\opencode",
+        "opencode",
     ]
     for c in candidates:
+        resolved = _resolve_opencode_on_windows(c) if is_windows else c
         for use_shell in (False, True):
             try:
+                cmd = [resolved, "--version"] if not use_shell else f"{resolved} --version"
                 r = subprocess.run(
-                    [c, "--version"] if not use_shell else f"{c} --version",
-                    capture_output=True, text=True, timeout=5, shell=use_shell)
+                    cmd, capture_output=True, text=True, timeout=5, shell=use_shell)
                 if r.returncode == 0:
-                    _opencode_path = c
-                    return c
+                    _opencode_path = resolved
+                    return resolved
                 break
             except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, OSError):
-                if use_shell: continue
+                if use_shell:
+                    continue
     return None
+
+
+def _resolve_opencode_on_windows(base: str) -> str:
+    """On Windows, prefer opencode.cmd > opencode.exe > extensionless base."""
+    for ext in (".cmd", ".exe"):
+        candidate = base + ext
+        if os.path.isfile(candidate):
+            return candidate
+    if os.path.isfile(base):
+        return base
+    for ext in (".cmd", ".exe"):
+        candidate = base + ext
+        found = shutil_which(candidate)
+        if found:
+            return found
+    return base
+
+
+def shutil_which(cmd: str) -> str | None:
+    import shutil
+    return shutil.which(cmd)
 
 
 def opencode_is_available() -> bool:

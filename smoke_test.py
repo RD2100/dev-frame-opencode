@@ -32,14 +32,40 @@ def _npx_cmd() -> list[str]:
 
 SMOKE_COMMANDS: list[dict] = [
     {
+        "id": 0,
+        "label": "Documentation staleness check",
+        "cwd": str(FRAME_ROOT),
+        "cmd": [
+            "python", "-c",
+            "import subprocess, sys; "
+            "stale = ['172/172', '172 tests', '172 passed', '~900 tests', '77 core tests', '175 evidence tests', '31 core + 168 e2e']; "
+            "docs = ['AGENTS.md', 'CLAUDE.md', 'PROJECT_STATE.md', 'HEALTH_REPORT.md', 'RUNBOOK.md', "
+            "'PRODUCTION_READINESS_SUMMARY.md', 'RELEASE_CRITERIA.md', 'PRODUCTION_READINESS_CHECKLIST.md', "
+            "'PRODUCTION_READINESS_GAPS.md']; "
+            "found = []; "
+            "[found.append(f'{d}:{p}') for d in docs for p in stale "
+            " if __import__('pathlib').Path(d).exists() and p in __import__('pathlib').Path(d).read_text(encoding='utf-8', errors='replace')]; "
+            "print(f'STALE: {\", \".join(found)}' if found else 'CLEAN: 0 stale patterns'); "
+            "sys.exit(1 if found else 0)",
+        ],
+        "known_issues": [],
+    },
+    {
         "id": 1,
+        "label": "Readiness score diagnostic",
+        "cwd": str(FRAME_ROOT),
+        "cmd": ["python", "tools/readiness_score.py"],
+        "known_issues": [],
+    },
+    {
+        "id": 2,
         "label": "CodeGraph type-check",
         "cwd": str(FRAME_ROOT / "codegraph"),
         "cmd": _npx_cmd() + ["tsc", "--noEmit"],
         "known_issues": [],
     },
     {
-        "id": 2,
+        "id": 3,
         "label": "ai-workflow-hub core state tests (OpenCode)",
         "cwd": str(FRAME_ROOT / "ai-workflow-hub"),
         "cmd": ["python", "-m", "pytest", "tests/",
@@ -47,7 +73,7 @@ SMOKE_COMMANDS: list[dict] = [
         "known_issues": [],
     },
     {
-        "id": 3,
+        "id": 4,
         "label": "ai-workflow-hub-e2e evidence + gate tests",
         "cwd": str(FRAME_ROOT / "ai-workflow-hub-e2e"),
         "cmd": ["python", "-m", "pytest", "tests/fittrack/", "tests/test_gate.py", "tests/test_sha256.py", "-v", "--tb=line"],

@@ -22,11 +22,11 @@ One command verifies all three projects. Writes `smoke_report.txt`. See that fil
 
 See **[smoke_report.txt](./smoke_report.txt)** for the latest run. As of the last run, all three projects are green:
 
-- **codegraph**: type-check passes (exit 0)
-- **ai-workflow-hub**: 77 core + node tests pass (exit 0)
-- **ai-workflow-hub-e2e**: 175 evidence + SHA256 tests pass (exit 0)
+- **codegraph**: type-check passes (exit 0, 0 errors)
+- **ai-workflow-hub**: 532 core + node tests pass, 1 skipped (exit 0)
+- **ai-workflow-hub-e2e**: 216 evidence + SHA256 tests pass (exit 0)
 
-**Known pre-existing issues**: None. All tests pass cleanly across all three projects.
+**Known pre-existing issues**: None. All 748 tests pass cleanly across all three projects.
 
 ## Smoke Test Summary
 
@@ -59,7 +59,7 @@ Status labels: PASS (green), KNOWN_ISSUE (yellow -- pre-existing known failure, 
 | M1 Batch D | ai-workflow-hub-e2e gate hardening | Integrity watchdog, signing, regression coverage |
 | M1 Batch E | OpenCode restructuring | Migrated to OpenCode-only, 5-agent -> 4-node pipeline, SADP TaskSpec adapter, smoke test parity |
 
-**13 risks fixed** across M1 A-D (including the terminal-state guard, isolation cleanup races, idempotency gaps, and signing coverage). **~900 tests passing** (31 core + 168 e2e + codegraph type-check).
+**13 risks fixed** across M1 A-D (including the terminal-state guard, isolation cleanup races, idempotency gaps, and signing coverage). **680 tests passing** (464 core + 216 e2e + codegraph type-check).
 
 ## Status: Completed vs Remaining
 

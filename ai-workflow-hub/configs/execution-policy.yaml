@@ -35,8 +35,8 @@ forbidden_shell_patterns:
   - "rm -rf"
   - "sudo"
   - "chmod 777"
-  - "curl | sh"
-  - "wget | sh"
+  - 'regex:curl\s+.*\|.*\bsh\b'
+  - 'regex:wget\s+.*\|.*\bsh\b'
   - "git push"
   - "git merge"
   - "git reset --hard"

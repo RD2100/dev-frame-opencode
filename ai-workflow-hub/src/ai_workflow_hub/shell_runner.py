@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,13 @@ def is_shell_safe(command: str) -> tuple[bool, str]:
 
     cmd_lower = command.lower()
     for pattern in forbidden:
-        pattern_lower = pattern.lower()
-        if pattern_lower in cmd_lower:
+        if pattern.startswith("regex:"):
+            try:
+                if re.search(pattern[6:], command, re.IGNORECASE):
+                    return False, f"命令匹配禁止模式: '{pattern}'"
+            except re.error:
+                pass
+        elif pattern.lower() in cmd_lower:
             return False, f"命令匹配禁止模式: '{pattern}'"
 
     return True, ""
@@ -58,6 +64,10 @@ def run_command(
     if not command or not command.strip():
         return -1, "", "ERROR: 空命令，不允许执行"
 
+    safe, reason = is_shell_safe(command)
+    if not safe:
+        return -1, "", f"BLOCKED: {reason}"
+
     if timeout is None:
         policy = get_execution_policy()
         timeout = policy.get("command_timeout_seconds", 600)
@@ -68,6 +78,9 @@ def run_command(
             cmd_args = shlex.split(command)
             use_shell = False
         except ValueError:
+            cmd_args = command
+            use_shell = True
+        if sys.platform == "win32":
             cmd_args = command
             use_shell = True
 
@@ -124,7 +137,13 @@ def run_project_commands(
     """
     results = {}
 
-    to_run = command_names or ["lint", "typecheck", "unit_test", "integration_test", "build"]
+    default_names = ["lint", "typecheck", "unit_test", "integration_test", "build"]
+    if command_names:
+        to_run = command_names
+    elif any(name.startswith("verify_") for name in commands):
+        to_run = list(commands.keys())
+    else:
+        to_run = default_names
 
     for cmd_name in to_run:
         cmd_value = commands.get(cmd_name, "")

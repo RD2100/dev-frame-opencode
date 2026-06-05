@@ -142,6 +142,28 @@ def get_execution_policy() -> dict[str, Any]:
     return load_yaml("configs/execution-policy.yaml")
 
 
+def validate_execution_policy() -> list[dict[str, str]]:
+    """验证 execution-policy 中 forbidden_shell_patterns 的正则表达式.
+
+    M4-A3: 确定性检测配置中的无效正则模式，不依赖运行时 is_shell_safe 的静默跳过。
+
+    Returns:
+        无效模式的列表，每项包含 pattern 和 error 字段。
+        空列表表示所有正则模式有效。
+    """
+    import re
+    policy = get_execution_policy()
+    forbidden = policy.get("forbidden_shell_patterns", [])
+    invalid: list[dict[str, str]] = []
+    for pattern in forbidden:
+        if pattern.startswith("regex:"):
+            try:
+                re.compile(pattern[6:])
+            except re.error as e:
+                invalid.append({"pattern": pattern, "error": str(e)})
+    return invalid
+
+
 def get_projects() -> dict[str, Any]:
     """加载 projects.yaml."""
     return load_yaml("projects.yaml")

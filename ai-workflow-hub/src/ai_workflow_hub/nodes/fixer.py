@@ -47,6 +47,17 @@ def build_fixer_prompt(state: dict[str, Any]) -> str:
     if ci_report:
         result += f"\n\n## CI Failure Report (FACTS)\n{ci_report[:3000]}\n\nFix the CI failures above."
 
+    # 注入 Issue Ledger 上下文
+    ledger_ctx = state.get("ledger_prompt_context", "")
+    if ledger_ctx:
+        result += "\n\n" + ledger_ctx
+    result += (
+        "\n\n## Agent Issue Ledger Output\n"
+        f"If you discover fix-loop or implementation issues, write JSON to `{state.get('run_dir', '')}/coding-issues.json` "
+        "using {\"issues\":[{\"severity\":\"P2\",\"category\":\"...\",\"title\":\"...\","
+        "\"next_prompt_hint\":\"...\"}]}."
+    )
+
     return result
 
 
@@ -68,7 +79,7 @@ def fixer_node(state: dict[str, Any]) -> dict[str, Any]:
     cwd = worktree_path or project_path
     state["fix_round"] = fix_round
 
-    if dry_run and not apply_changes:
+    if not apply_changes:
         # dry-run: 不调用 OpenCode
         fix_log = f"# Fix Log (Round {fix_round}) [DRY-RUN]\n\nWould fix:\n"
         for f in next_fixes:
