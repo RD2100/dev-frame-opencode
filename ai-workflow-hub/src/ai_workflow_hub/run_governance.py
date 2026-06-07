@@ -105,3 +105,19 @@ def render_full_governance_cli(governance: dict[str, Any]) -> str:
 
     lines.append("─" * 60)
     return "\n".join(lines)
+
+
+def render_full_governance_md(governance: dict[str, Any]) -> str:
+    """Render a governance summary dict as Markdown."""
+    lines = ["## Run Governance", ""]
+    evidence_ok = governance.get("evidence_ok", False)
+    lines.append(f"- Evidence: {'[OK]' if evidence_ok else '[WARN]'}")
+    for f in governance.get("present_files", []):
+        lines.append(f"  - present: {f}")
+    for f in governance.get("missing_files", []):
+        lines.append(f"  - missing: {f}")
+    chain_trusted = governance.get("chain_trusted", False)
+    lines.append(f"- Chain: {'[OK]' if chain_trusted else '[WARN]'} status={governance.get('chain_status', 'MISSING')}")
+    lines.append(f"- Run: status={governance.get('run_status', 'unknown')} final-report={governance.get('final_report_status', 'MISSING')}")
+    lines.append("")
+    return "\n".join(lines)
