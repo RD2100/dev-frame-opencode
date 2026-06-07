@@ -22,11 +22,11 @@ One command verifies all three projects. Writes `smoke_report.txt`. See that fil
 
 See **[smoke_report.txt](./smoke_report.txt)** for the latest run. As of the last run, all three projects are green:
 
-- **codegraph**: type-check passes (exit 0, 0 errors)
-- **ai-workflow-hub**: 532 core + node tests pass, 1 skipped (exit 0)
+- **codegraph**: type-check passes (exit 0, 0 errors), 34/37 test files pass (fork pool for Windows)
+- **ai-workflow-hub**: 147 core + node tests pass, 1 skipped (exit 0)
 - **ai-workflow-hub-e2e**: 216 evidence + SHA256 tests pass (exit 0)
 
-**Known pre-existing issues**: None. All 748 tests pass cleanly across all three projects.
+**Known pre-existing issues**: 2 skipped CodeGraph test files (Windows platform-gated), 1 worker error resolved with pool: forks.
 
 ## Smoke Test Summary
 
