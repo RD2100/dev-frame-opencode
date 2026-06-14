@@ -103,6 +103,16 @@ pack_a*_evidence.py
 nudge_a*.py
 ai-workflow-hub/pack_a*_evidence.py
 ai-workflow-hub/nudge_a*.py
+ai-workflow-hub/MagicMock/
+ai-workflow-hub/evidence/
+ai-workflow-hub/_*.py
+ai-workflow-hub/check_*.py
+ai-workflow-hub/read_*.py
+ai-workflow-hub/recover_cli.py
+ai-workflow-hub/recovered_sections.py
+ai-workflow-hub/scan_unicode.py
+ai-workflow-hub/cli_*.py
+ai-workflow-hub/test_emdash.py
 ai-workflow-hub/scripts/pack_a*.py
 ai-workflow-hub/scripts/validate_a*.py
 ai-workflow-hub/scripts/_fix_*.py
