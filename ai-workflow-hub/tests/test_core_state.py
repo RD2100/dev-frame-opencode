@@ -14,6 +14,15 @@ from ai_workflow_hub.task_queue import (
 from ai_workflow_hub.run_store import save_run_file, save_run_json
 
 
+@pytest.fixture(autouse=True)
+def isolated_task_queue(tmp_path, monkeypatch):
+    """Keep task queue state in tmp_path so tests never mutate repo tasks.yaml."""
+    import ai_workflow_hub.config_loader as config_loader
+
+    monkeypatch.setattr(config_loader, "_hub_dir", lambda: tmp_path)
+    monkeypatch.setattr(config_loader, "_TASKS_LOCKFILE", tmp_path / "tasks.yaml.lock")
+
+
 # ---------------------------------------------------------------------------
 # Fix 1: mark_task_running() terminal-state guard
 # ---------------------------------------------------------------------------

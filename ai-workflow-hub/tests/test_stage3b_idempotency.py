@@ -393,6 +393,8 @@ class TestGoalBatchSkip:
         ), patch(
             "ai_workflow_hub.cli._execute_run", side_effect=fake_exec_run
         ), patch(
+            "ai_workflow_hub.task_queue.add_task", return_value="task-test-exec"
+        ), patch(
             "ai_workflow_hub.goal_runner._discover_run_id", return_value="run-1"
         ), patch(
             "ai_workflow_hub.goal_report.generate_goal_report"
