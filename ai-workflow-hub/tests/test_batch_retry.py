@@ -80,6 +80,8 @@ class TestGoalBatchRetry:
         ), patch(
             "ai_workflow_hub.cli._execute_run", side_effect=fake_exec_run
         ), patch(
+            "ai_workflow_hub.task_queue.add_task", return_value="task-test-retry"
+        ), patch(
             "ai_workflow_hub.goal_runner._discover_run_id",
             side_effect=["", "run-retry-1"]
         ), patch(
@@ -139,6 +141,8 @@ class TestGoalBatchRetry:
         ), patch(
             "ai_workflow_hub.cli._execute_run", side_effect=fake_exec_run
         ), patch(
+            "ai_workflow_hub.task_queue.add_task", return_value="task-test-exhaust"
+        ), patch(
             "ai_workflow_hub.goal_runner._discover_run_id", return_value=""
         ), patch(
             "ai_workflow_hub.goal_report.generate_goal_report"
@@ -190,6 +194,8 @@ class TestGoalBatchRetry:
             "ai_workflow_hub.goal_runner.all_batches_passed", return_value=False
         ), patch(
             "ai_workflow_hub.cli._execute_run", side_effect=fake_exec_run
+        ), patch(
+            "ai_workflow_hub.task_queue.add_task", return_value="task-test-noretry"
         ), patch(
             "ai_workflow_hub.goal_runner._discover_run_id", return_value=""
         ), patch(
@@ -259,6 +265,8 @@ class TestGoalBatchRetry:
             "ai_workflow_hub.goal_runner.all_batches_passed", return_value=True
         ), patch(
             "ai_workflow_hub.cli._execute_run", side_effect=fake_exec_run
+        ), patch(
+            "ai_workflow_hub.task_queue.add_task", return_value="task-test-ev"
         ), patch(
             "ai_workflow_hub.goal_runner._discover_run_id",
             side_effect=["run-1", "run-2"]
