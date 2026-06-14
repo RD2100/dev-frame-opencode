@@ -13,6 +13,7 @@ authors = [{name = "AI Workflow Hub"}]
 
 dependencies = [
     "typer>=0.9.0",
+    "click>=8.2.0,<9",    # A78: pin tested range (stdout/stderr separation, no Click 9 compat risk)
     "rich>=13.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",

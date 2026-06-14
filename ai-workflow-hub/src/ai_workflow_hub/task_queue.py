@@ -12,6 +12,7 @@ _DEFAULTS = {
     "priority": "normal",
     "dependencies": [],
     "coding_backend": "",
+    "workflow_type": "coding",
     "last_run_id": "",
     "retry_count": 0,
     "blocked_reason": "",
@@ -63,8 +64,9 @@ def _now() -> str:
 
 def add_task(project_id: str, title: str, description: str = "",
              risk: str = "medium", priority: str = "normal",
-             coding_backend: str = "") -> str:
-    """添加任务 — 加锁 RMW."""
+             coding_backend: str = "",
+             workflow_type: str = "coding") -> str:
+    """添加任务 — 加锁 RMW (A16: workflow_type support)."""
     import uuid
     with tasks_lock():
         data = get_tasks()
@@ -79,6 +81,7 @@ def add_task(project_id: str, title: str, description: str = "",
             "title": title, "description": description,
             "risk": risk, "status": "queued", "priority": priority,
             "dependencies": [], "coding_backend": coding_backend,
+            "workflow_type": workflow_type,
             "last_run_id": "", "retry_count": 0, "blocked_reason": "",
             "last_started_at": "", "lease_until": "",
             "created_at": now, "updated_at": now,

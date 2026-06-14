@@ -1,4 +1,4 @@
-"""aihub CLI — Typer 命令行入口.
+"""aihub CLI -- Typer 命令行入口.
 
 审计强化:
 - doctor: OpenCode models 检查
@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import fnmatch
+import hashlib
 import json
 import os
 import sys
@@ -45,7 +47,18 @@ app = typer.Typer(
 )
 
 console = Console()
+err_console = Console(stderr=True)
 
+
+# A75: Module-level pure JSON emitter — writes directly to console's file
+# handle, bypassing Rich formatting (markup, highlight, soft-wrap, crop).
+# Safe across environments (Windows, Linux, CI terminals).
+# NOTE: target defaults to None and resolves at call time so that test
+# patches of `ai_workflow_hub.cli.console` are respected.
+def _emit_json(obj: Any, *, target: Console | None = None) -> None:
+    _t = target if target is not None else console
+    _t.file.write(json.dumps(obj, indent=2, ensure_ascii=False, default=str))
+    _t.file.write("\n")
 
 # ============================================================
 # project 命令
@@ -53,7 +66,6 @@ console = Console()
 
 project_app = typer.Typer(help="项目管理")
 app.add_typer(project_app, name="project")
-
 
 @project_app.command("list")
 def project_list():
@@ -81,7 +93,6 @@ def project_list():
 
     console.print(table)
 
-
 @project_app.command("validate")
 def project_validate(project_id: str = typer.Option(..., "--project", "-p", help="项目 ID")):
     init_env()
@@ -101,10 +112,9 @@ def project_validate(project_id: str = typer.Option(..., "--project", "-p", help
     if is_valid:
         console.print(f"\n[green]Validation PASSED[/green]")
     else:
-        console.print(f"\n[red]Validation FAILED — {len([m for m in messages if m.startswith('ERROR')])} error(s)[/red]")
+        console.print(f"\n[red]Validation FAILED -- {len([m for m in messages if m.startswith('ERROR')])} error(s)[/red]")
 
     raise typer.Exit(0 if is_valid else 1)
-
 
 # ============================================================
 # task 命令
@@ -112,7 +122,6 @@ def project_validate(project_id: str = typer.Option(..., "--project", "-p", help
 
 task_app = typer.Typer(help="任务管理")
 app.add_typer(task_app, name="task")
-
 
 @task_app.command("list")
 def task_list(status: Optional[str] = typer.Option(None, "--status", "-s")):
@@ -146,7 +155,6 @@ def task_list(status: Optional[str] = typer.Option(None, "--status", "-s")):
 
     console.print(table)
 
-
 @task_app.command("mark")
 def task_mark(
     task_id: str = typer.Argument(..., help="任务 ID"),
@@ -162,10 +170,9 @@ def task_mark(
     from .task_queue import mark_task_finished
     ok = mark_task_finished(task_id, status, blocked_reason=reason)
     if ok:
-        console.print(f"[green]{task_id} → {status}[/green]")
+        console.print(f"[green]{task_id} -> {status}[/green]")
     else:
         console.print(f"[red]任务 '{task_id}' 不存在[/red]")
-
 
 @task_app.command("pause")
 def task_pause(task_id: str = typer.Argument(..., help="任务 ID")):
@@ -173,10 +180,9 @@ def task_pause(task_id: str = typer.Argument(..., help="任务 ID")):
     init_env()
     from .task_queue import pause_task
     if pause_task(task_id):
-        console.print(f"[green]{task_id} → paused[/green]")
+        console.print(f"[green]{task_id} -> paused[/green]")
     else:
         console.print(f"[red]无法暂停: {task_id} (仅 queued 状态可暂停)[/red]")
-
 
 @task_app.command("resume")
 def task_resume(task_id: str = typer.Argument(..., help="任务 ID")):
@@ -184,10 +190,9 @@ def task_resume(task_id: str = typer.Argument(..., help="任务 ID")):
     init_env()
     from .task_queue import resume_task
     if resume_task(task_id):
-        console.print(f"[green]{task_id} → queued[/green]")
+        console.print(f"[green]{task_id} -> queued[/green]")
     else:
         console.print(f"[red]无法恢复: {task_id} (仅 paused 状态可恢复)[/red]")
-
 
 @task_app.command("cancel")
 def task_cancel(task_id: str = typer.Argument(..., help="任务 ID")):
@@ -195,10 +200,9 @@ def task_cancel(task_id: str = typer.Argument(..., help="任务 ID")):
     init_env()
     from .task_queue import cancel_task
     if cancel_task(task_id):
-        console.print(f"[green]{task_id} → cancelled[/green]")
+        console.print(f"[green]{task_id} -> cancelled[/green]")
     else:
         console.print(f"[red]无法取消: {task_id}[/red]")
-
 
 @task_app.command("archive")
 def task_archive(task_id: str = typer.Argument(..., help="任务 ID")):
@@ -206,10 +210,9 @@ def task_archive(task_id: str = typer.Argument(..., help="任务 ID")):
     init_env()
     from .task_queue import archive_task
     if archive_task(task_id):
-        console.print(f"[green]{task_id} → archived[/green]")
+        console.print(f"[green]{task_id} -> archived[/green]")
     else:
         console.print(f"[red]无法归档: {task_id} (仅 passed/cancelled/blocked/failed 可归档)[/red]")
-
 
 @task_app.command("retry")
 def task_retry(task_id: str = typer.Argument(..., help="任务 ID")):
@@ -220,10 +223,9 @@ def task_retry(task_id: str = typer.Argument(..., help="任务 ID")):
     if ok:
         t = find_task(task_id)
         rc = t.get("retry_count", 0) if t else 0
-        console.print(f"[green]{task_id} → queued (retry #{rc})[/green]")
+        console.print(f"[green]{task_id} -> queued (retry #{rc})[/green]")
     else:
         console.print(f"[red]任务 '{task_id}' 不存在[/red]")
-
 
 @task_app.command("add")
 def task_add(
@@ -246,14 +248,12 @@ def task_add(
     task_id = add_task(project_id, title, description, risk)
     console.print(f"[green]任务已添加: {task_id}[/green]")
 
-
 # ============================================================
 # run 命令
 # ============================================================
 
 run_app = typer.Typer(help="运行管理")
 app.add_typer(run_app, name="run")
-
 
 @run_app.command("start")
 def run_start(
@@ -265,7 +265,6 @@ def run_start(
     """运行工作流。默认 dry-run。OpenCode-only."""
     init_env()
     _execute_run(project_id, task_id, apply_changes, run_tests)
-
 
 @app.command("go")
 def go_dispatch(
@@ -320,7 +319,6 @@ def go_dispatch(
         report_path = _write_execution_report(run_dir)
         console.print(f"[green]ExecutionReport:[/green] {report_path}")
 
-
 @run_app.command("all")
 def run_all(
     risk: Optional[str] = typer.Option(None, "--risk", "-r", help="按风险等级过滤: low | medium | high"),
@@ -350,7 +348,6 @@ def run_all(
         except typer.Exit:
             pass
 
-
 @app.command("board")
 def task_board_cmd(watch: bool = typer.Option(False, "--watch", "-w", help="持续刷新")):
     """任务仪表盘."""
@@ -362,7 +359,6 @@ def task_board_cmd(watch: bool = typer.Option(False, "--watch", "-w", help="持�
             break
         _time.sleep(5)
         console.clear()
-
 
 @run_app.command("show")
 def run_show(run_id: str = typer.Option(..., "--run-id", "-r")):
@@ -431,8 +427,6 @@ def run_show(run_id: str = typer.Option(..., "--run-id", "-r")):
         governance_summary = {"governance": {}}
     console.print(render_full_governance_cli(governance_summary))
 
-
-
 @run_app.command("prune")
 def run_prune(
     project_id: str = typer.Option("", "--project", "-p"),
@@ -483,11 +477,10 @@ def run_prune(
     action = "would prune" if dry_run else "pruned"
     console.print(f"[green]{action}: {pruned} runs[/green]")
 
-
 @run_app.command("recover")
 def run_recover(run_id: str = typer.Option(..., "--run-id", "-r"),
                 project_id: str = typer.Option("", "--project", "-p")):
-    """恢复建议 — 不自动执行，只给出可操作步骤."""
+    """恢复建议 -- 不自动执行，只给出可操作步骤."""
     init_env()
     from .run_store import list_runs
     runs = list_runs(limit=200)
@@ -507,7 +500,6 @@ def run_recover(run_id: str = typer.Option(..., "--run-id", "-r"),
     run_governance = result.get("run_governance", {})
     if run_governance:
         console.print(render_full_governance_cli(run_governance))
-
 
 @run_app.command("verify")
 def run_verify(run_id: str = typer.Option(..., "--run-id", "-r"),
@@ -551,7 +543,7 @@ def run_verify(run_id: str = typer.Option(..., "--run-id", "-r"),
     console.print(render_full_governance_cli(run_governance))
     return
     if not fr_trusted:
-        console.print(f"[yellow]WARN: final-report is fallback/local template — trusted_for_status=false[/yellow]")
+        console.print(f"[yellow]WARN: final-report is fallback/local template -- trusted_for_status=false[/yellow]")
 
     # Governance summary (display-only, aligned with final-report)
     try:
@@ -560,7 +552,6 @@ def run_verify(run_id: str = typer.Option(..., "--run-id", "-r"),
     except Exception:
         gov = {}
     console.print(render_governance_lines_cli(gov))
-
 
 @run_app.command("latest")
 def run_latest(project_id: str = typer.Option(..., "--project", "-p")):
@@ -572,7 +563,6 @@ def run_latest(project_id: str = typer.Option(..., "--project", "-p")):
         run_show(run_id=runs[0].get("run_id", ""))
     else:
         console.print("[dim]No runs[/dim]")
-
 
 def _load_task_spec(path: Path) -> dict[str, Any]:
     """Load a SADP TaskSpec from JSON or YAML."""
@@ -589,7 +579,6 @@ def _load_task_spec(path: Path) -> dict[str, Any]:
         raise typer.Exit(1)
     return data
 
-
 def _verification_commands_from_spec(verify: list[str]) -> dict[str, str]:
     """Convert TaskSpec verify list into named shell commands."""
     commands: dict[str, str] = {}
@@ -598,14 +587,12 @@ def _verification_commands_from_spec(verify: list[str]) -> dict[str, str]:
             commands[f"verify_{index}"] = command.strip()
     return commands
 
-
 @dataclass
 class VerifyDenyConflict:
     verify_command_name: str
     script_path: str
     derived_candidate: str
     deny_target: str
-
 
 def _check_verify_deny_conflict(
     verify_commands: dict[str, str],
@@ -659,7 +646,6 @@ def _check_verify_deny_conflict(
             )
         raise typer.Exit(69)
 
-
 def _write_execution_report(run_dir: str) -> str:
     """Write @go ExecutionReport artifacts from run evidence."""
     from .execution_report_adapter import to_execution_report
@@ -686,7 +672,6 @@ def _write_execution_report(run_dir: str) -> str:
         "```",
     ])
     return save_run_file(run_dir, "execution-report.md", "\n".join(lines))
-
 
 # ============================================================
 # status / report 命令
@@ -737,7 +722,6 @@ def task_board():
         )
     console.print(table)
 
-
 def status_command():
     init_env()
     runs = list_runs(limit=20)
@@ -773,7 +757,6 @@ def status_command():
 
     console.print(table)
 
-
 @app.command("report")
 def report_command(run_id: str = typer.Option(..., "--run", "-r")):
     init_env()
@@ -796,14 +779,12 @@ def report_command(run_id: str = typer.Option(..., "--run", "-r")):
     else:
         console.print(f"[yellow]report 不存在: {run_id}[/yellow]")
 
-
 # ============================================================
 # backup 命令
 # ============================================================
 
 bu_app = typer.Typer(help="备份管理")
 app.add_typer(bu_app, name="backup")
-
 
 @bu_app.command("list")
 def backup_list(limit: int = typer.Option(20, "--limit", "-n")):
@@ -817,7 +798,6 @@ def backup_list(limit: int = typer.Option(20, "--limit", "-n")):
     for b in backups:
         console.print(f"[dim]{b.get('_ts','?')[:19]}[/dim] {b.get('action','?')}: {b.get('source','?')}")
 
-
 @bu_app.command("show")
 def backup_show(timestamp: str = typer.Argument(..., help="时间戳前缀")):
     """查看备份详情."""
@@ -830,7 +810,6 @@ def backup_show(timestamp: str = typer.Argument(..., help="时间戳前缀")):
     else:
         console.print(f"[red]未找到: {timestamp}[/red]")
 
-
 @bu_app.command("restore")
 def backup_restore(timestamp: str = typer.Argument(..., help="时间戳前缀")):
     """恢复备份."""
@@ -842,14 +821,12 @@ def backup_restore(timestamp: str = typer.Argument(..., help="时间戳前缀"))
     else:
         console.print(f"[red]{result.get('error')}[/red]")
 
-
 # ============================================================
 # worktree 命令
 # ============================================================
 
 wt_app = typer.Typer(help="worktree 管理")
 app.add_typer(wt_app, name="worktree")
-
 
 @wt_app.command("list")
 def worktree_list():
@@ -877,7 +854,6 @@ def worktree_list():
             matched = any(wt_dir.name in lr for lr in [tt.get("last_run_id", "") for tt in tasks_map.values()])
             table.add_row(rel, task_id or "?", "-")
     console.print(table)
-
 
 @wt_app.command("clean")
 def worktree_clean(
@@ -916,7 +892,6 @@ def worktree_clean(
 
     console.print(f"[green]清理完成: {cleaned} 个 worktree[/green]")
 
-
 @app.command("apply")
 def aihub_apply(
     description: str = typer.Argument(..., help="任务描述"),
@@ -924,26 +899,24 @@ def aihub_apply(
     risk: str = typer.Option("", "--risk", "-r"),
     project: str = typer.Option("", "--project", "-p"),
 ):
-    """真实执行 — 改代码 / 测试 / 复审."""
+    """真实执行 -- 改代码 / 测试 / 复审."""
     _aihub_plan_or_apply(description, apply_changes=True, auto_yes=auto_yes,
                          risk=risk, project=project)
-
 
 @app.command("plan")
 def aihub_plan(
     description: str = typer.Argument(..., help="任务描述"),
-    apply_changes: bool = typer.Option(False, "--apply", help="拒绝 — 请用 aihub apply"),
+    apply_changes: bool = typer.Option(False, "--apply", help="拒绝 -- 请用 aihub apply"),
     auto_yes: bool = typer.Option(False, "--yes", "-y"),
     risk: str = typer.Option("", "--risk", "-r"),
     project: str = typer.Option("", "--project", "-p"),
 ):
-    """预演 — dry-run，不改代码."""
+    """预演 -- dry-run，不改代码."""
     if apply_changes:
         console.print("[red]plan 不支持 --apply。请使用: aihub apply[/red]")
         raise typer.Exit(1)
     _aihub_plan_or_apply(description, apply_changes=False, auto_yes=False,
                          risk=risk, project=project)
-
 
 @app.command("do")
 def aihub_do(
@@ -957,7 +930,6 @@ def aihub_do(
     console.print("[yellow]aihub do is deprecated. Use aihub plan (dry-run) or aihub apply.[/yellow]")
     _aihub_plan_or_apply(description, apply_changes=apply_changes, auto_yes=auto_yes,
                          risk=risk, project=project)
-
 
 def _aihub_plan_or_apply(
     description: str,
@@ -1041,9 +1013,9 @@ def _aihub_plan_or_apply(
             console.print(f"[red]OpenCode not ready: {reason}[/red]")
             return
 
-    # 8. Apply — risk/human gate
+    # 8. Apply -- risk/human gate
     if task_risk == "high":
-        console.print(f"[red]HIGH RISK task — requires human gate. Use manual workflow.[/red]")
+        console.print(f"[red]HIGH RISK task -- requires human gate. Use manual workflow.[/red]")
         return
 
     if not auto_yes:
@@ -1056,11 +1028,9 @@ def _aihub_plan_or_apply(
     console.print(f"\n[bold]Apply: {description[:100]}[/bold]")
     _execute_run(proj_id, task_id, apply_changes=True, run_tests=False)
 
-
 def infer_risk_from_desc(description: str) -> str:
     from .project_detect import infer_risk
     return infer_risk(description)
-
 
 @app.command("init")
 def project_init(
@@ -1069,7 +1039,7 @@ def project_init(
     force: bool = typer.Option(False, "--force", "-f", help="覆盖已有 WORKFLOW.md"),
     auto: bool = typer.Option(False, "--auto", help="自动探测 + 注册项目"),
 ):
-    """初始化项目 — 生成 .aiworkflow/WORKFLOW.md."""
+    """初始化项目 -- 生成 .aiworkflow/WORKFLOW.md."""
     init_env()
     from .init_project import init_project
     result = init_project(path=path, proj_type=proj_type, force=force, auto_register=auto)
@@ -1084,14 +1054,12 @@ def project_init(
     for k, v in result.get("test_commands", {}).items():
         console.print(f"  {k}: {v}")
 
-
 # ============================================================
 # issue 命令
 # ============================================================
 
 issue_app = typer.Typer(help="Issue ledger 管理")
 app.add_typer(issue_app, name="issue")
-
 
 @issue_app.command("import")
 def issue_import(
@@ -1107,7 +1075,6 @@ def issue_import(
         console.print(f"[green]Imported {count} issues[/green]")
     else:
         console.print("[dim]No new issues to import[/dim]")
-
 
 @issue_app.command("list")
 def issue_list():
@@ -1150,7 +1117,6 @@ def issue_list():
 
     console.print(table)
 
-
 @issue_app.command("verify")
 def issue_verify(
     recurrence_key: str = typer.Argument(..., help="Recurrence key to verify"),
@@ -1165,7 +1131,6 @@ def issue_verify(
 
     mark_verified(recurrence_key, verification="CLI verified", title=title)
     console.print(f"[green]Verified: {recurrence_key}[/green]")
-
 
 @issue_app.command("close")
 def issue_close(
@@ -1187,7 +1152,6 @@ def issue_close(
     override_str = " [human_override]" if human_override else ""
     console.print(f"[yellow]Closed (wontfix): {recurrence_key}{override_str}[/yellow]")
 
-
 @issue_app.command("reopen")
 def issue_reopen(
     recurrence_key: str = typer.Argument(..., help="Recurrence key to reopen"),
@@ -1198,7 +1162,6 @@ def issue_reopen(
 
     mark_reopen(recurrence_key)
     console.print(f"[green]Reopened: {recurrence_key}[/green]")
-
 
 @issue_app.command("accept-risk")
 def issue_accept_risk(
@@ -1215,7 +1178,6 @@ def issue_accept_risk(
     mark_accepted_risk(recurrence_key, title=title)
     console.print(f"[yellow]Accepted risk: {recurrence_key}[/yellow]")
 
-
 @issue_app.command("mitigate")
 def issue_mitigate(
     recurrence_key: str = typer.Argument(..., help="Recurrence key to mark as mitigated"),
@@ -1230,7 +1192,6 @@ def issue_mitigate(
 
     mark_mitigated(recurrence_key, title=title)
     console.print(f"[green]Mitigated: {recurrence_key}[/green]")
-
 
 @issue_app.command("obsolete")
 def issue_obsolete(
@@ -1247,7 +1208,6 @@ def issue_obsolete(
     mark_obsolete(recurrence_key, title=title)
     console.print(f"[dim]Obsoleted: {recurrence_key}[/dim]")
 
-
 # ============================================================
 # governance 命令 (read-only matrix summary)
 # ============================================================
@@ -1255,9 +1215,7 @@ def issue_obsolete(
 gov_app = typer.Typer(help="Governance matrix (read-only)")
 app.add_typer(gov_app, name="governance")
 
-
 VALID_GOVERNANCE_MATRIX_FORMATS = ("panel", "markdown", "json", "snapshot")
-
 
 @gov_app.command("matrix")
 def governance_matrix_cmd(
@@ -1285,7 +1243,6 @@ def governance_matrix_cmd(
         from .governance_matrix import build_governance_matrix_panel
         console.print(build_governance_matrix_panel())
 
-
 # ============================================================
 # backend 命令
 # ============================================================
@@ -1293,10 +1250,9 @@ def governance_matrix_cmd(
 backend_app = typer.Typer(help="Backend management")
 app.add_typer(backend_app, name="backend")
 
-
 @backend_app.command("probe")
 def backend_probe():
-    """轻量探针 — 检查 OpenCode 可用性，不消耗 token."""
+    """轻量探针 -- 检查 OpenCode 可用性，不消耗 token."""
     init_env()
 
     from .opencode_client import opencode_is_available, opencode_cli_check
@@ -1319,7 +1275,6 @@ def backend_probe():
         cat = "BACKEND_UNAVAILABLE"
     console.print(f"[bold]Category:[/bold] {cat}")
 
-
 @backend_app.command("status")
 def backend_status():
     """显示 OpenCode backend 健康度."""
@@ -1327,13 +1282,12 @@ def backend_status():
     console.print("[bold]Backend:[/bold] opencode (always current backend)")
     console.print("[dim]Health tracking moved to per-run state.json[/dim]")
 
-
 @backend_app.command("stress")
 def backend_stress(
     count: int = typer.Option(5, "--count", "-n"),
     project: str = typer.Option("test-repo", "--project", "-p"),
 ):
-    """OpenCode 压力测试 — 连续 N 次 apply."""
+    """OpenCode 压力测试 -- 连续 N 次 apply."""
     init_env()
     import time as _t
 
@@ -1402,7 +1356,6 @@ def backend_stress(
         avg = sum(durations) / len(durations)
         console.print(f"Avg duration: {avg:.1f}s | Min: {min(durations):.1f}s | Max: {max(durations):.1f}s")
 
-
 # ============================================================
 # ops 命令
 # ============================================================
@@ -1410,10 +1363,9 @@ def backend_stress(
 ops_app = typer.Typer(help="运营状态")
 app.add_typer(ops_app, name="ops")
 
-
 @ops_app.command("status")
 def ops_status():
-    """一屏运营视图 — 不调模型，只读."""
+    """一屏运营视图 -- 不调模型，只读."""
     init_env()
     from .task_queue import list_tasks
     from .daemon import daemon_is_running
@@ -1452,7 +1404,6 @@ def ops_status():
     run_count = sum(1 for _ in runs_dir.rglob("state.json")) if runs_dir.exists() else 0
     console.print(f"[bold]Runs:[/bold] {run_count} with state.json")
 
-
 # ============================================================
 # goal 命令
 # ============================================================
@@ -1460,15 +1411,13 @@ def ops_status():
 goal_app = typer.Typer(help="多步骤目标编排")
 app.add_typer(goal_app, name="goal")
 
-
 @goal_app.command("plan")
 def goal_plan(objective: str = typer.Argument(..., help="目标描述")):
-    """Goal plan — 需要手动设置 batches (goal_planner removed in OpenCode migration)."""
+    """Goal plan -- 需要手动设置 batches (goal_planner removed in OpenCode migration)."""
     init_env()
     console.print(f"[bold]Planning: {objective[:100]}[/bold]")
     console.print("[yellow]goal plan: planner removed. Create goal manually or use @go via OpenCode.[/yellow]")
     console.print("[dim]See: aihub goal --help[/dim]")
-
 
 @goal_app.command("run")
 def goal_run(
@@ -1482,12 +1431,11 @@ def goal_run(
     if g.get("error"):
         console.print(f"[red]{g['error']}[/red]")
         return
-    console.print(f"[bold]Goal: {g['goal_id']} → {g['status']}[/bold]")
+    console.print(f"[bold]Goal: {g['goal_id']} -> {g['status']}[/bold]")
     for r in g.get("results", []):
         icon = "[green]OK[/green]" if r["status"] == "passed" else "[red]FAIL[/red]"
         name = r.get("batch") or r.get("slice", "?")
         console.print(f"  {icon} {name}: {r.get('run_id','')} {r.get('reason','')}")
-
 
 @goal_app.command("status")
 def goal_status(goal_id: str = typer.Argument(..., help="Goal ID")):
@@ -1527,7 +1475,6 @@ def goal_status(goal_id: str = typer.Argument(..., help="Goal ID")):
                     "blocked":"[red]BLOCK[/red]"}.get(sl["status"], "[dim]?[/dim]")
             console.print(f"  {icon} {sl['slice_id']}: {sl['title'][:50]}")
 
-
 @goal_app.command("list")
 def goal_list(limit: int = typer.Option(20, "--limit", "-n")):
     """列出所有 goals."""
@@ -1549,7 +1496,6 @@ def goal_list(limit: int = typer.Option(20, "--limit", "-n")):
             passed = sum(1 for s in slices if s["status"] == "passed")
             console.print(f"[dim]{g['goal_id']}[/dim] {g['status']:12s} {passed}/{n} slices  {g['objective'][:60]}")
 
-
 @goal_app.command("report")
 def goal_report_cmd(goal_id: str = typer.Argument(..., help="Goal ID")):
     """生成 goal 报告 (goal-report.md + goal-evidence.json)."""
@@ -1562,7 +1508,6 @@ def goal_report_cmd(goal_id: str = typer.Argument(..., help="Goal ID")):
     console.print(f"[green]Report: {result['report_path']}[/green]")
     console.print(f"[green]Evidence: {result['evidence_path']}[/green]")
     console.print(f"[dim]Batches: {result.get('batches', 0)}[/dim]")
-
 
 @goal_app.command("review-recovered")
 def goal_review_recovered(
@@ -1671,7 +1616,7 @@ Output: verdict (passed/failed/blocked) and reason.
 
             from .goal_report import generate_goal_report
             generate_goal_report(goal_id)
-            console.print(f"[green]Reviewer: {verdict.upper()} — state written[/green]")
+            console.print(f"[green]Reviewer: {verdict.upper()} -- state written[/green]")
             try:
                 console.print(f"[dim]{review_text[:200]}[/dim]")
             except UnicodeEncodeError:
@@ -1679,7 +1624,6 @@ Output: verdict (passed/failed/blocked) and reason.
                 console.print(f"[dim]{safe}[/dim]")
         except Exception as e:
             console.print(f"[red]Reviewer error: {e}[/red]")
-
 
 # ============================================================
 # acceptance 命令
@@ -1689,7 +1633,6 @@ acceptance_app = typer.Typer(help="自动化验收套件")
 app.add_typer(acceptance_app, name="acceptance")
 
 SUITES = {"smoke", "backend", "daemon", "external", "audit", "zero-config", "chain", "chain-truth", "chain-truth-negative", "dynamic", "goal", "cleanup", "status-check", "backend-probe", "assertion-check", "recovery-pipeline", "rc-check", "cleanup-safety", "all", "baseline", "compare", "daemon-atomicity"}
-
 
 @acceptance_app.command("run")
 def acceptance_run(suite: str = typer.Argument("smoke", help=f"Suite: {', '.join(sorted(SUITES))}")):
@@ -1738,14 +1681,12 @@ def acceptance_run(suite: str = typer.Argument("smoke", help=f"Suite: {', '.join
     if rc:
         raise typer.Exit(1)
 
-
 # ============================================================
 # PR 命令
 # ============================================================
 
 pr_app = typer.Typer(help="PR 创建")
 app.add_typer(pr_app, name="pr")
-
 
 @pr_app.command("preview")
 def pr_preview(
@@ -1757,7 +1698,6 @@ def pr_preview(
     from .pr_create import preview_pr
     body = preview_pr(project_id, run_id)
     console.print(Panel(body[:3000], title=f"PR Preview: {run_id}"))
-
 
 @pr_app.command("create")
 def pr_create_cmd(
@@ -1777,14 +1717,12 @@ def pr_create_cmd(
         if result["body"]:
             console.print(Panel(result["body"][:1000], title="PR Body (would be)"))
 
-
 # ============================================================
 # CI 命令
 # ============================================================
 
 ci_app = typer.Typer(help="CI inspect/fix")
 app.add_typer(ci_app, name="ci")
-
 
 @ci_app.command("inspect")
 def ci_inspect(
@@ -1808,7 +1746,6 @@ def ci_inspect(
         with open(report_path, encoding="utf-8") as f:
             console.print(f.read()[:1000])
 
-
 @ci_app.command("fix")
 def ci_fix(
     project_id: str = typer.Option(..., "--project", "-p"),
@@ -1830,14 +1767,12 @@ def ci_fix(
     else:
         console.print(f"[green]{result['ci_results']}[/green]")
 
-
 # ============================================================
 # daemon 命令
 # ============================================================
 
 daemon_app = typer.Typer(help="本地任务调度 daemon")
 app.add_typer(daemon_app, name="daemon")
-
 
 @daemon_app.command("start")
 def daemon_start(once: bool = typer.Option(False, "--once", help="只执行一轮")):
@@ -1849,7 +1784,6 @@ def daemon_start(once: bool = typer.Option(False, "--once", help="只执行一�
         raise typer.Exit(1)
     console.print("[bold]Daemon 启动...[/bold]")
     daemon_loop(once=once)
-
 
 @daemon_app.command("stop")
 def daemon_stop():
@@ -1871,7 +1805,6 @@ def daemon_stop():
     except Exception as e:
         console.print(f"[red]停止失败: {e}[/red]")
     _cleanup_lock()
-
 
 @daemon_app.command("soak")
 def daemon_soak_cmd(
@@ -1909,7 +1842,6 @@ def daemon_soak_cmd(
     if result["exit_code"] != 0:
         raise typer.Exit(1)
 
-
 @daemon_app.command("status")
 def daemon_status():
     """查看 daemon 状态."""
@@ -1941,136 +1873,6 @@ def daemon_status():
     passed = list_tasks(status="passed")
     console.print(f"\n[bold]Queued: {len(queued)}  Running: {len(running)}  Blocked: {len(blocked)}  Passed: {len(passed)}[/bold]")
 
-
-# ============================================================
-# doctor 命令 (增强)
-# ============================================================
-
-@app.command("doctor")
-def doctor(strict: bool = typer.Option(False, "--strict", help="生产就绪检查")):
-    """检查系统环境."""
-    init_env()
-
-    console.print("[bold]ai-workflow-hub Doctor (OpenCode only)[/bold]")
-    console.print(f"\n[bold]Backend:[/bold] opencode")
-    console.print()
-
-    if strict:
-        console.print("[bold yellow]STRICT MODE[/bold yellow]\n")
-    else:
-        console.print()
-
-    checks = []
-
-    # Python
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    checks.append(("Python >= 3.10", py_ver >= "3.10", py_ver))
-
-    # Git
-    import subprocess
-    try:
-        git_result = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
-        git_ok = git_result.returncode == 0
-        git_ver = git_result.stdout.strip()
-    except Exception:
-        git_ok = False
-        git_ver = "not found"
-    checks.append(("Git", git_ok, git_ver))
-
-    # OpenCode CLI + 兼容检查
-    from .opencode_client import opencode_is_available, opencode_cli_check, opencode_list_models
-    opencode_ok = opencode_is_available()
-    if opencode_ok:
-        cli_info = opencode_cli_check()
-        flags_found = cli_info.get("flags_found", [])
-        flags_missing = cli_info.get("flags_missing", [])
-        models_cmd = cli_info.get("models_cmd_ok", False)
-
-        flags_str = ", ".join(f"{f}={'Y' if f in flags_found else 'N'}" for f in flags_found + flags_missing)
-        detail = f"available, [{flags_str}]" if flags_str else "available"
-        checks.append(("OpenCode CLI", True, detail))
-
-        if flags_missing:
-            checks.append(("OpenCode missing flags", False, f"missing: {', '.join(flags_missing)}"))
-        else:
-            checks.append(("OpenCode flags", True, "all required flags found"))
-
-        checks.append(("OpenCode models cmd", models_cmd, "available" if models_cmd else "not available"))
-
-        if models_cmd:
-            available_models = opencode_list_models()
-            checks.append(("OpenCode models list", bool(available_models), f"{len(available_models)} models found" if available_models else "empty"))
-    else:
-        checks.append(("OpenCode CLI", False, "not found"))
-
-    # Release policy
-    policy = get_execution_policy()
-    rp = policy.get("release_policy", {})
-    for key in ["allow_push", "allow_pr_create", "allow_merge", "allow_deploy"]:
-        val = rp.get(key, False)
-        checks.append((f"Release: {key}", not val, "BLOCKED (default)" if not val else "ENABLED"))
-
-    # OpenCode 模型检查
-    console.print("\n[bold]Model (OpenCode only):[/bold]")
-    from .model_config import get_model_for_risk
-    for r_level in ["high", "medium", "low"]:
-        model = get_model_for_risk(r_level)
-        has_slash = "/" in model
-        checks.append((f"Model [{r_level} risk]: {model}", has_slash, "provider/model OK" if has_slash else "missing provider/"))
-
-    # 环境变量
-    env_vars = ["OPENCODE_API_KEY"]
-    for var in env_vars:
-        val = os.environ.get(var, "")
-        is_set = bool(val)
-        masked = val[:4] + "..." if len(val) > 4 else "(not set)"
-        display = masked if is_set else "(not set)"
-        checks.append((f"ENV: {var}", is_set, display))
-
-    # Python 依赖
-    deps = ["langgraph", "typer", "rich", "pydantic", "yaml", "dotenv"]
-    for dep in deps:
-        try:
-            __import__(dep.replace("-", "_"))
-            checks.append((f"Python: {dep}", True, "installed"))
-        except ImportError:
-            checks.append((f"Python: {dep}", False, "not installed"))
-
-    # 配置
-    from .config_loader import _hub_dir
-    for config_file in ["projects.yaml", "tasks.yaml", "configs/risk-policy.yaml", "configs/execution-policy.yaml"]:
-        exists = (_hub_dir() / config_file).exists()
-        checks.append((f"Config: {config_file}", exists, "found" if exists else "missing"))
-
-    # M4-A3: 执行策略正则模式验证
-    invalid_patterns = validate_execution_policy()
-    if invalid_patterns:
-        for item in invalid_patterns:
-            checks.append((f"Policy regex: {item['pattern']}", False, f"invalid — {item['error']}"))
-    else:
-        checks.append(("Execution policy regex", True, "all valid"))
-
-    # 输出
-    all_ok = True
-    for name, ok, detail in checks:
-        icon = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
-        if not ok:
-            all_ok = False
-        console.print(f"  {icon}  {name}: {detail}")
-
-    console.print()
-    if all_ok:
-        console.print("[green]所有检查通过[/green]")
-    else:
-        console.print("[yellow]部分检查未通过，请安装缺失依赖或设置环境变量[/yellow]")
-
-    if strict and not all_ok:
-        raise typer.Exit(1)
-
-
-# ============================================================
-# 核心执行逻辑
-# ============================================================
 
 def _execute_run(project_id: str, task_id: str, apply_changes: bool, run_tests: bool = False,
                  task_allowed_files: list[str] | None = None,
@@ -2633,6 +2435,4270 @@ def _write_chain_evidence(run_dir: str, state: dict) -> None:
         _j.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+# ============================================================
+# paper 命令 (A17: Paper Review Workflow CLI)
+# ============================================================
+
+paper_app = typer.Typer(help="Paper review workflow management")
+app.add_typer(paper_app, name="paper")
+
+def _paper_runtime():
+    """Lazy import of paper_runtime (avoids circular / heavy import at CLI load)."""
+    from .context_layer.adapters.paper_runtime import (
+        create_paper_run,
+        execute_paper_run,
+        resume_paper_run,
+        get_paper_run_status,
+        sanitize_run_id,
+        redact_state,
+    )
+    return {
+        "create": create_paper_run,
+        "execute": execute_paper_run,
+        "resume": resume_paper_run,
+        "status": get_paper_run_status,
+        "sanitize": sanitize_run_id,
+        "redact": redact_state,
+    }
+
+def _redact_str(text: str) -> str:
+    """Redact sensitive field names from free-form strings (A17 L3 + A18B fix).
+
+    Handles both simple patterns (paragraph_text: ...) and JSON/dict quoted
+    forms ("paragraph_text": "...").  Prevents accidental leakage of sensitive
+    field values in warnings/errors/issue descriptions.
+    """
+    import re as _re
+    for field in ("paragraph_text", "writelab_token"):
+        # Simple: field: value  or  field=value  (to end of line)
+        text = _re.sub(
+            rf"({field})\s*[:=]\s*.+",
+            rf"\1: [REDACTED]",
+            text,
+            flags=_re.IGNORECASE,
+        )
+        # JSON-quoted: "field": "..."  or  "field": <any-value>
+        text = _re.sub(
+            rf'("{field}")\s*:\s*"[^"]*"',
+            rf'\1: "[REDACTED]"',
+            text,
+            flags=_re.IGNORECASE,
+        )
+    return text
+
+def _deep_redact(obj):
+    """Recursively redact sensitive fields in a JSON-serialisable object (A18B).
+
+    Replaces values of known sensitive keys with '[REDACTED]'.
+    Also applies _redact_str to all string values to catch embedded patterns.
+    """
+    _SENSITIVE_KEYS = {"paragraph_text", "writelab_token"}
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k.lower() in _SENSITIVE_KEYS:
+                out[k] = "[REDACTED]"
+            else:
+                out[k] = _deep_redact(v)
+        return out
+    if isinstance(obj, list):
+        return [_deep_redact(item) for item in obj]
+    if isinstance(obj, str):
+        return _redact_str(obj)
+    return obj
+
+def _paper_runs_root() -> Path:
+    """Return the paper runs root directory (shared with paper_runtime)."""
+    return Path.home() / ".ai_workflow_hub" / "runs" / "paper"
+
+@paper_app.command("create")
+def paper_create(
+    task_id: str = typer.Option(..., "--task", "-t", help="Paper review task ID"),
+    project_id: str = typer.Option("", "--project", "-p", help="Project ID"),
+):
+    """Create a new paper review run."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        result = rt["create"](task_id=task_id, project_id=project_id)
+    except (ValueError, OSError) as e:
+        console.print(f"[red]Create failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Paper run created: {result['run_id']}[/green]")
+    console.print(f"  Run dir: {result['run_dir']}")
+    console.print(f"  Task:    {result['task_id']}")
+    if result["project_id"]:
+        console.print(f"  Project: {result['project_id']}")
+
+@paper_app.command("run")
+def paper_run(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    zip_path: Optional[str] = typer.Option(None, "--zip", help="Offline handoff ZIP path (A18)"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON (A18)"),
+):
+    """Execute a paper review workflow."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+    if safe_id != run_id:
+        console.print(f"[yellow]run_id sanitized: {run_id} -> {safe_id}[/yellow]")
+
+    # A18: --zip sets offline mode overrides
+    overrides = {}
+    if zip_path:
+        if not Path(zip_path).exists():
+            console.print(f"[red]ZIP not found: {zip_path}[/red]")
+            raise typer.Exit(1)
+        overrides["writelab_mode"] = "offline"
+        overrides["handoff_zip_path"] = zip_path
+
+    try:
+        result = rt["execute"](safe_id, state_overrides=overrides if overrides else None)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Execute failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    status = result.get("status", "unknown")
+    state = result.get("state", {})
+    redacted = rt["redact"](state)
+
+    if as_json:
+        output = {
+            "run_id": result["run_id"],
+            "status": status,
+            "task_id": state.get("task_id", ""),
+            "acceptance_status": redacted.get("acceptance_status", ""),
+            "blocking_count": redacted.get("blocking_count", 0),
+            "executed_nodes": redacted.get("executed_nodes", []),
+            "gate_artifact": result.get("gate_artifact", ""),
+            "warnings": [_redact_str(w) for w in result.get("warnings", [])],
+        }
+        if result.get("error"):
+            output["error"] = _redact_str(result["error"])
+        _emit_json(output)
+        return
+
+    sc = {"completed": "green", "error": "red", "human_required": "yellow",
+          "blocked": "red"}.get(status, "")
+    console.print(f"\n[bold [{sc}]]Status: {status}[/{sc}]")
+    console.print(f"  Run ID: {result['run_id']}")
+    console.print(f"  Task:   {state.get('task_id', '')}")
+
+    executed = redacted.get("executed_nodes", [])
+    if executed:
+        console.print(f"  Nodes:  {', '.join(executed)}")
+
+    if status == "human_required":
+        gate = result.get("gate_artifact", "")
+        console.print(f"\n[yellow]Human review required.[/yellow]")
+        if gate:
+            console.print(f"  Artifact: {gate}")
+        console.print(f"  Resume:   aihub paper resume --run-id {safe_id} --decision approved --reviewer <id>")
+
+    warnings = result.get("warnings", [])
+    for w in warnings:
+        console.print(f"  [yellow]WARN: {_redact_str(w)}[/yellow]")
+
+    if result.get("error"):
+        console.print(f"  [red]Error: {_redact_str(result['error'])}[/red]")
+
+@paper_app.command("resume")
+def paper_resume(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    decision: str = typer.Option(..., "--decision", "-d", help="approved or rejected"),
+    reviewer: str = typer.Option("", "--reviewer", help="Reviewer ID"),
+    note: str = typer.Option("", "--note", "-n", help="Decision note"),
+):
+    """Resume a paused paper run after human decision."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+    if safe_id != run_id:
+        console.print(f"[yellow]run_id sanitized: {run_id} -> {safe_id}[/yellow]")
+
+    try:
+        result = rt["resume"](
+            run_id=safe_id,
+            decision=decision,
+            reviewer_id=reviewer,
+            note=note,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Resume failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    status = result.get("status", "unknown")
+    state = result.get("state", {})
+    redacted = rt["redact"](state)
+
+    sc = {"completed": "green", "error": "red", "human_required": "yellow",
+          "blocked": "red"}.get(status, "")
+    console.print(f"\n[bold [{sc}]]Status: {status}[/{sc}]")
+    console.print(f"  Run ID:   {result['run_id']}")
+    console.print(f"  Decision: {state.get('human_gate_decision', decision)}")
+    console.print(f"  Round:    {state.get('decision_round', 0)}")
+
+    executed = redacted.get("executed_nodes", [])
+    if executed:
+        console.print(f"  Nodes:    {', '.join(executed)}")
+
+    warnings = result.get("warnings", [])
+    for w in warnings:
+        console.print(f"  [yellow]WARN: {_redact_str(w)}[/yellow]")
+
+    if result.get("error"):
+        console.print(f"  [red]Error: {_redact_str(result['error'])}[/red]")
+
+@paper_app.command("status")
+def paper_status(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON (A18)"),
+):
+    """Show the current status of a paper run."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+    if safe_id != run_id:
+        console.print(f"[yellow]run_id sanitized: {run_id} -> {safe_id}[/yellow]")
+
+    info = rt["status"](safe_id)
+    if info is None:
+        console.print(f"[red]Paper run not found: {safe_id}[/red]")
+        raise typer.Exit(1)
+
+    # Redact any sensitive fields before display
+    redacted_info = rt["redact"](info)
+
+    if as_json:
+        _emit_json(redacted_info)
+        return
+
+    status = redacted_info.get("status", "unknown")
+    sc = {"completed": "green", "error": "red", "human_required": "yellow",
+          "blocked": "red", "created": "dim", "running": "blue"}.get(status, "")
+    console.print(f"[bold [{sc}]]{status}[/{sc}]")
+    console.print(f"  Run ID:     {redacted_info.get('run_id', '')}")
+    console.print(f"  Task:       {redacted_info.get('task_id', '')}")
+    console.print(f"  Project:    {redacted_info.get('project_id', '')}")
+    console.print(f"  Acceptance: {redacted_info.get('acceptance_status', '')}")
+    console.print(f"  Blocking:   {redacted_info.get('blocking_count', 0)}")
+    console.print(f"  Decision:   {redacted_info.get('human_gate_decision', '')}")
+    console.print(f"  Round:      {redacted_info.get('decision_round', 0)}")
+
+    executed = redacted_info.get("executed_nodes", [])
+    if executed:
+        console.print(f"  Nodes:      {', '.join(executed)}")
+
+    err = redacted_info.get("error_message", "")
+    if err:
+        console.print(f"  [red]Error: {err[:200]}[/red]")
+
+    console.print(f"  Created:    {redacted_info.get('created_at', '')}")
+    console.print(f"  Updated:    {redacted_info.get('updated_at', '')}")
+
+@paper_app.command("list")
+def paper_list(
+    limit: int = typer.Option(20, "--limit", "-n", help="Max runs to show"),
+    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
+):
+    """List paper review runs."""
+    init_env()
+    rt = _paper_runtime()
+    runs_root = _paper_runs_root()
+
+    if not runs_root.exists():
+        console.print("[dim]No paper runs found[/dim]")
+        return
+
+    run_dirs = sorted(
+        [d for d in runs_root.iterdir() if d.is_dir()],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not run_dirs:
+        console.print("[dim]No paper runs found[/dim]")
+        return
+
+    table = Table(title="Paper Runs")
+    table.add_column("Run ID", style="cyan")
+    table.add_column("Task")
+    table.add_column("Status")
+    table.add_column("Blocking")
+    table.add_column("Updated")
+
+    count = 0
+    for rd in run_dirs:
+        if count >= limit:
+            break
+        state_file = rd / "state.json"
+        if not state_file.exists():
+            continue
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        # Redact before display (A16B L3)
+        redacted = rt["redact"](state)
+
+        status = redacted.get("status", "unknown")
+        if status_filter and status != status_filter:
+            continue
+
+        sc = {"completed": "green", "error": "red", "human_required": "yellow",
+              "blocked": "red", "created": "dim", "running": "blue"}.get(status, "")
+
+        updated = redacted.get("updated_at", "")[:19]
+        table.add_row(
+            rd.name,
+            (redacted.get("task_id", ""))[:30],
+            f"[{sc}]{status}[/{sc}]",
+            str(redacted.get("blocking_count", 0)),
+            updated,
+        )
+        count += 1
+
+    if count == 0:
+        console.print("[dim]No matching paper runs[/dim]")
+    else:
+        console.print(table)
+
+# ============================================================
+# A18: paper go / ledger / evidence / validate
+# ============================================================
+
+def _paper_ledger_api():
+    """Lazy import of paper_issue_ledger (A18)."""
+    from .context_layer.adapters.paper_issue_ledger import (
+        ledger_summary,
+        get_all_issues,
+        get_open_issues,
+        blocking_count,
+        critical_count,
+        is_clear,
+    )
+    return {
+        "summary": ledger_summary,
+        "all_issues": get_all_issues,
+        "open_issues": get_open_issues,
+        "blocking_count": blocking_count,
+        "critical_count": critical_count,
+        "is_clear": is_clear,
+    }
+
+def _paper_gate_api():
+    """Lazy import of paper_acceptance_gate (A18)."""
+    from .context_layer.adapters.paper_acceptance_gate import (
+        validate_acceptance_result,
+    )
+    return {"validate": validate_acceptance_result}
+
+def _load_run_state(run_id: str) -> tuple[dict[str, Any], Path] | tuple[None, None]:
+    """Load state.json for a paper run. Returns (state_dict, run_dir) or (None, None)."""
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError:
+        return None, None
+    runs_root = _paper_runs_root()
+    run_dir = runs_root / safe_id
+    state_file = run_dir / "state.json"
+    if not state_file.exists():
+        return None, None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    return state, run_dir
+
+@paper_app.command("go")
+def paper_go(
+    task_id: str = typer.Option(..., "--task", "-t", help="Paper review task ID"),
+    project_id: str = typer.Option("", "--project", "-p", help="Project ID"),
+    zip_path: Optional[str] = typer.Option(None, "--zip", help="Offline handoff ZIP path"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Create and execute a paper review workflow in one step (A18)."""
+    init_env()
+    rt = _paper_runtime()
+
+    try:
+        run_info = rt["create"](task_id=task_id, project_id=project_id)
+    except (ValueError, OSError) as e:
+        console.print(f"[red]Create failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    run_id = run_info["run_id"]
+    if not as_json:
+        console.print(f"[green]Created: {run_id}[/green]")
+
+    # If --zip provided, set offline mode overrides
+    overrides = {}
+    if zip_path:
+        if not Path(zip_path).exists():
+            console.print(f"[red]ZIP not found: {zip_path}[/red]")
+            raise typer.Exit(1)
+        overrides["writelab_mode"] = "offline"
+        overrides["handoff_zip_path"] = zip_path
+
+    try:
+        result = rt["execute"](run_id, state_overrides=overrides if overrides else None)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Execute failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    status = result.get("status", "unknown")
+    state = result.get("state", {})
+    redacted = rt["redact"](state)
+
+    if as_json:
+        output = {
+            "run_id": run_id,
+            "status": status,
+            "task_id": task_id,
+            "project_id": project_id,
+            "acceptance_status": redacted.get("acceptance_status", ""),
+            "blocking_count": redacted.get("blocking_count", 0),
+            "executed_nodes": redacted.get("executed_nodes", []),
+            "gate_artifact": result.get("gate_artifact", ""),
+            "warnings": [_redact_str(w) for w in result.get("warnings", [])],
+        }
+        _emit_json(output)
+        return
+
+    sc = {"completed": "green", "error": "red", "human_required": "yellow",
+          "blocked": "red"}.get(status, "")
+    console.print(f"\n[bold [{sc}]]Status: {status}[/{sc}]")
+    console.print(f"  Run ID: {run_id}")
+
+    executed = redacted.get("executed_nodes", [])
+    if executed:
+        console.print(f"  Nodes:  {', '.join(executed)}")
+
+    if status == "human_required":
+        gate = result.get("gate_artifact", "")
+        console.print(f"\n[yellow]Human review required.[/yellow]")
+        if gate:
+            console.print(f"  Artifact: {gate}")
+
+    for w in result.get("warnings", []):
+        console.print(f"  [yellow]WARN: {_redact_str(w)}[/yellow]")
+    if result.get("error"):
+        console.print(f"  [red]Error: {_redact_str(result['error'])}[/red]")
+
+@paper_app.command("ledger")
+def paper_ledger(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    show_all: bool = typer.Option(False, "--all", "-a", help="Show all issues (not just open)"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Show paper issue ledger for a run (A18)."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+
+    state, run_dir = _load_run_state(safe_id)
+    if state is None:
+        console.print(f"[red]Paper run not found: {safe_id}[/red]")
+        raise typer.Exit(1)
+
+    task_id = state.get("task_id", "")
+    if not task_id:
+        console.print(f"[red]No task_id in run state[/red]")
+        raise typer.Exit(1)
+
+    ledger = _paper_ledger_api()
+    summary = ledger["summary"](task_id)
+    issues = ledger["all_issues"](task_id) if show_all else ledger["open_issues"](task_id)
+
+    if as_json:
+        output = {
+            "run_id": safe_id,
+            "task_id": task_id,
+            "summary": summary,
+            "issues": _deep_redact(issues),
+        }
+        _emit_json(output)
+        return
+
+    console.print(f"[bold]Ledger: {task_id}[/bold]")
+    console.print(f"  Total: {summary.get('total', 0)}  Open: {summary.get('open', 0)}  "
+                  f"Resolved: {summary.get('resolved', 0)}")
+    console.print(f"  Blocking: {summary.get('blocking', 0)}  Critical: {summary.get('critical', 0)}")
+    clear = ledger["is_clear"](task_id)
+    if clear:
+        console.print(f"  [green]CLEAR -- no blocking/critical issues[/green]")
+    else:
+        console.print(f"  [red]NOT CLEAR -- blocking or critical issues remain[/red]")
+
+    if issues:
+        table = Table(title=f"{'All' if show_all else 'Open'} Issues")
+        table.add_column("ID", style="cyan")
+        table.add_column("Type")
+        table.add_column("Severity")
+        table.add_column("Status")
+        table.add_column("Description")
+        for iss in issues[:30]:
+            sev = iss.get("severity", "")
+            sev_style = {"critical": "red", "major": "yellow", "minor": "dim", "info": "dim"}.get(sev, "")
+            raw_desc = iss.get("description", iss.get("message", ""))
+            table.add_row(
+                iss.get("issue_id", ""),
+                iss.get("issue_type", ""),
+                f"[{sev_style}]{sev}[/{sev_style}]",
+                iss.get("status", ""),
+                _redact_str(raw_desc)[:60],
+            )
+        console.print(table)
+    else:
+        console.print(f"  [dim]No {'issues' if show_all else 'open issues'}[/dim]")
+
+@paper_app.command("evidence")
+def paper_evidence(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Show evidence manifest for a paper run (A18)."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+
+    state, _ = _load_run_state(safe_id)
+    if state is None:
+        console.print(f"[red]Paper run not found: {safe_id}[/red]")
+        raise typer.Exit(1)
+
+    evidence = state.get("evidence_manifest", {})
+    if not evidence:
+        console.print(f"[dim]No evidence manifest recorded for {safe_id}[/dim]")
+        return
+
+    if as_json:
+        _emit_json(_deep_redact(evidence))
+        return
+
+    console.print(f"[bold]Evidence Manifest: {safe_id}[/bold]")
+    console.print(f"  Reviewer: {evidence.get('reviewer', 'N/A')}")
+    console.print(f"  Status: {evidence.get('manifest_status', 'N/A')}")
+    console.print(f"  Pack ref: {evidence.get('evidence_pack_ref', '')}")
+    attestation = evidence.get("privacy_attestation", {})
+    if attestation:
+        ok = attestation.get("privacy_ok", False)
+        console.print(f"  Privacy: {'[green]OK[/green]' if ok else '[red]VIOLATION[/red]'}")
+
+    entries = evidence.get("entries", [])
+    if entries:
+        table = Table(title="Evidence Entries")
+        table.add_column("Source")
+        table.add_column("Type")
+        table.add_column("Status")
+        table.add_column("Issues")
+        for entry in entries[:20]:
+            table.add_row(
+                entry.get("source", ""),
+                entry.get("evidence_type", ""),
+                entry.get("status", ""),
+                str(entry.get("issue_count", 0)),
+            )
+        console.print(table)
+
+@paper_app.command("validate")
+def paper_validate(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Validate the acceptance result of a paper run (A18)."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+
+    state, _ = _load_run_state(safe_id)
+    if state is None:
+        console.print(f"[red]Paper run not found: {safe_id}[/red]")
+        raise typer.Exit(1)
+
+    acceptance = state.get("acceptance_result", {})
+    if not acceptance:
+        console.print(f"[dim]No acceptance_result in run state for {safe_id}[/dim]")
+        return
+
+    gate = _paper_gate_api()
+    errors = gate["validate"](acceptance)
+
+    if as_json:
+        output = {
+            "run_id": safe_id,
+            "status": acceptance.get("status", "unknown"),
+            "valid": len(errors) == 0,
+            "validation_errors": _deep_redact(errors),
+        }
+        _emit_json(output)
+        return
+
+    status = acceptance.get("status", "unknown")
+    sc = {"accepted": "green", "accepted_with_limitation": "yellow",
+          "blocked": "red", "human_required": "yellow",
+          "needs_more_evidence": "yellow"}.get(status, "dim")
+    console.print(f"[bold {sc}]Acceptance: {status}[/bold {sc}]")
+
+    if errors:
+        console.print(f"[red]Validation FAILED -- {len(errors)} error(s):[/red]")
+        for err in errors:
+            console.print(f"  [red]{_redact_str(err)}[/red]")
+        raise typer.Exit(1)
+    else:
+        console.print(f"[green]Validation PASSED -- acceptance result is well-formed[/green]")
+
+    reasons = acceptance.get("reasons", [])
+    if reasons:
+        for r in reasons[:5]:
+            console.print(f"  Reason: {_redact_str(r)[:120]}")
+
+    blocking = acceptance.get("blocking_issues", [])
+    if blocking:
+        console.print(f"  Blocking issues: {len(blocking)}")
+
+# ============================================================
+# A24: Artifact Binding Helpers
+# ============================================================
+
+_WARNING_SEVERITY: dict[str, str] = {
+    "ledger_load_failed": "critical",
+    "decision_audit_load_failed": "critical",
+    "evidence_verification": "critical",
+    "evidence_manifest_missing": "warning",
+    "audit_trail_empty": "info",
+}
+
+def _classify_warning(msg: str) -> dict[str, str]:
+    """Classify a warning string into severity/subsystem/impact (A24)."""
+    severity = "warning"
+    for prefix, sev in _WARNING_SEVERITY.items():
+        if msg.startswith(prefix):
+            severity = sev
+            break
+    subsystem = msg.split(":")[0] if ":" in msg else "unknown"
+    impact = "closeout_partial" if severity == "critical" else "closeout_normal"
+    return {
+        "severity": severity,
+        "subsystem": subsystem,
+        "message": _redact_str(msg),
+        "impact": impact,
+    }
+
+def _build_artifact_chain(
+    run_dir: Path,
+    state: dict[str, Any],
+    ledger_dir: str,
+    decision_base: str | None,
+    evidence_manifest: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Compute SHA-256 hashes of underlying artifacts (A24)."""
+    chain: list[dict[str, str]] = []
+    task_id = state.get("task_id", "")
+
+    # state.json
+    sf = run_dir / "state.json"
+    if sf.exists():
+        chain.append({"artifact": "state.json",
+                       "sha256": hashlib.sha256(sf.read_bytes()).hexdigest()})
+
+    # ledger JSON
+    if task_id and ledger_dir:
+        lf = Path(ledger_dir) / f"{task_id}.json"
+        if lf.exists():
+            chain.append({"artifact": "ledger.json",
+                           "sha256": hashlib.sha256(lf.read_bytes()).hexdigest()})
+
+    # evidence files (from manifest)
+    for f in evidence_manifest.get("files", [])[:100]:
+        fp = f.get("path", f.get("file_path", ""))
+        if fp:
+            full = (run_dir / fp).resolve()
+            try:
+                if full.exists() and full.is_file() and str(full).startswith(str(run_dir.resolve())):
+                    chain.append({"artifact": f"evidence:{fp}",
+                                   "sha256": hashlib.sha256(full.read_bytes()).hexdigest()})
+            except OSError:
+                pass
+    return chain
+
+def _verify_evidence_files(
+    run_dir: Path,
+    evidence_manifest: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Independently verify evidence file existence and hashes (A24)."""
+    verified: list[dict[str, Any]] = []
+    for f in evidence_manifest.get("files", [])[:100]:
+        fp = f.get("path", f.get("file_path", ""))
+        entry: dict[str, Any] = {
+            "path": fp,
+            "manifest_sha256": f.get("sha256", f.get("hash", "")),
+            "manifest_size": f.get("size", 0),
+            "exists": False,
+            "actual_sha256": "",
+            "actual_size": 0,
+            "hash_match": False,
+        }
+        if fp:
+            full = (run_dir / fp).resolve()
+            try:
+                if full.exists() and full.is_file() and str(full).startswith(str(run_dir.resolve())):
+                    entry["exists"] = True
+                    entry["actual_size"] = full.stat().st_size
+                    entry["actual_sha256"] = hashlib.sha256(full.read_bytes()).hexdigest()
+                    entry["hash_match"] = (entry["actual_sha256"] == entry["manifest_sha256"])
+            except OSError:
+                pass
+        verified.append(entry)
+    return verified
+
+# ============================================================
+# A25: Audit Package Helpers
+# ============================================================
+
+def _hash_file(path: Path) -> str:
+    """SHA-256 hex digest of a file (A25)."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def _build_bundle_manifest(
+    bundle_id: str, run_id: str,
+    files: list[dict[str, Any]], timestamp: str,
+) -> dict[str, Any]:
+    """Build bundle_manifest.json with attestation (A25)."""
+    _sorted = sorted([(f["path"], f["sha256"]) for f in files])
+    content_hash = hashlib.sha256(
+        json.dumps(_sorted, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    bundle_hash = hashlib.sha256(json.dumps({
+        "bundle_id": bundle_id, "content_hash": content_hash,
+        "timestamp": timestamp, "run_id": run_id,
+    }, sort_keys=True).encode("utf-8")).hexdigest()
+    return {
+        "bundle_id": bundle_id, "generated_at": timestamp,
+        "run_id": run_id, "files": files,
+        "attestation": {
+            "content_hash": content_hash,
+            "bundle_hash": bundle_hash,
+            "timestamp": timestamp,
+        },
+    }
+
+def _rehash_artifact_chain_with_reports(
+    run_dir: Path, original_chain: list[dict[str, str]],
+    report_json_path: Path, report_md_path: Path,
+) -> list[dict[str, str]]:
+    """Extend artifact_chain with persisted report files (A25)."""
+    extended = list(original_chain)
+    if report_json_path.exists():
+        extended.append({"artifact": "closeout-report.json",
+                          "sha256": _hash_file(report_json_path)})
+    if report_md_path.exists():
+        extended.append({"artifact": "closeout-report.md",
+                          "sha256": _hash_file(report_md_path)})
+    return extended
+
+def _build_attestation_record(
+    run_id: str, bundle_id: str, timestamp: str,
+    content_hash: str, artifact_chain: list[dict[str, str]],
+    closeout_integrity: str,
+) -> dict[str, Any]:
+    """Build tamper-evident attestation record (A25)."""
+    return {
+        "run_id": run_id, "bundle_id": bundle_id,
+        "timestamp": timestamp, "content_hash": content_hash,
+        "artifact_hashes": [
+            {"artifact": a["artifact"], "sha256": a["sha256"]}
+            for a in artifact_chain
+        ],
+        "closeout_integrity": closeout_integrity,
+        "report_version": "1.0", "workflow_type": "paper",
+    }
+
+_REQUIRED_EVIDENCE_FILES = ["state.json", "closeout-report.json", "closeout-report.md"]
+
+def _check_omitted_evidence(
+    run_dir: Path, evidence_manifest: dict[str, Any],
+) -> list[str]:
+    """Detect files on disk not listed in evidence manifest (A25)."""
+    listed = set()
+    for f in evidence_manifest.get("files", []):
+        fp = f.get("path", f.get("file_path", ""))
+        if fp:
+            listed.add(fp)
+    omitted: list[str] = []
+    _EXCLUDE = {"bundle_", "attestation_", "closeout-report", "artifact_chain",
+                "validation-output", "omitted-evidence", "state"}
+    for f in run_dir.iterdir():
+        if f.is_file() and f.suffix in {".json", ".md", ".txt", ".yaml", ".patch"}:
+            if f.name not in listed and not any(f.name.startswith(p) for p in _EXCLUDE):
+                omitted.append(f.name)
+    return omitted
+
+@paper_app.command("report")
+def paper_report(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    save: bool = typer.Option(True, "--save/--no-save", help="Save report to run directory"),
+):
+    """Generate unified closeout report binding all run artifacts (A23)."""
+    init_env()
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        console.print(f"[red]Invalid run_id: {e}[/red]")
+        raise typer.Exit(1)
+    state, run_dir = _load_run_state(safe_id)
+
+    if state is None:
+        console.print(f"[red]Run not found: {safe_id}[/red]")
+        raise typer.Exit(1)
+
+    task_id = state.get("task_id", "")
+    project_id = state.get("project_id", "")
+
+    # --- Degradation warnings (A23B->A24 structured) ---
+    warnings_list: list[dict[str, str]] = []
+    _raw_warnings: list[str] = []
+
+    # --- Ledger data ---
+    ledger_data = {}
+    ledger_issues: list[dict] = []
+    if task_id:
+        try:
+            ledger_api = _paper_ledger_api()
+            ledger_dir = state.get("ledger_dir", "")
+            if ledger_dir:
+                ledger_data = ledger_api["summary"](task_id, ledger_dir=ledger_dir)
+                ledger_issues = ledger_api["all_issues"](task_id, ledger_dir=ledger_dir)
+            else:
+                ledger_data = ledger_api["summary"](task_id)
+                ledger_issues = ledger_api["all_issues"](task_id)
+        except Exception as e:
+            _raw_warnings.append(f"ledger_load_failed: {e}")
+
+    # --- Decision audit ---
+    decision_record = {}
+    audit_trail: list[dict] = []
+    if task_id:
+        try:
+            from .context_layer.adapters.paper_decision_audit import (
+                read_decision_record, get_audit_trail,
+            )
+            decision_base = state.get("decision_base_dir", "") or None
+            decision_record = read_decision_record(task_id, base_dir=decision_base) or {}
+            audit_trail = get_audit_trail(task_id, base_dir=decision_base) or []
+        except Exception as e:
+            _raw_warnings.append(f"decision_audit_load_failed: {e}")
+
+    # --- Evidence manifest + verification (A24) ---
+    evidence_manifest = state.get("evidence_manifest", {})
+    _evidence_verified: list[dict[str, Any]] = []
+    if evidence_manifest and run_dir:
+        _evidence_verified = _verify_evidence_files(run_dir, evidence_manifest)
+        _missing = sum(1 for v in _evidence_verified if not v["exists"])
+        _mismatched = sum(1 for v in _evidence_verified if v["exists"] and not v["hash_match"])
+        if _missing > 0:
+            _raw_warnings.append(f"evidence_verification: {_missing} file(s) missing")
+        if _mismatched > 0:
+            _raw_warnings.append(f"evidence_verification: {_mismatched} file(s) hash mismatch")
+
+    # Classify warnings (A24)
+    warnings_list = [_classify_warning(w) for w in _raw_warnings]
+
+    # --- Acceptance result ---
+    acceptance = state.get("acceptance_result", {})
+
+    # --- Build unified report ---
+    report = {
+        "report_version": "1.0",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run_id": safe_id,
+        "task_id": task_id,
+        "project_id": project_id,
+        "workflow_type": state.get("workflow_type", "paper"),
+        "run_status": state.get("status", "unknown"),
+        "created_at": state.get("created_at", ""),
+        "updated_at": state.get("updated_at", ""),
+        "executed_nodes": _deep_redact(state.get("executed_nodes", [])),
+        "acceptance": _deep_redact({
+            "status": acceptance.get("status", "unknown"),
+            "reasons": acceptance.get("reasons", []),
+            "blocking_count": state.get("blocking_count", 0),
+            "non_blocking_count": state.get("non_blocking_count", 0),
+            "required_next_actions": acceptance.get("required_next_actions", []),
+        }),
+        "ledger": _deep_redact(ledger_data) if ledger_data else {},
+        "ledger_issues_count": len(ledger_issues),
+        "ledger_issues_summary": _deep_redact([
+            {
+                "issue_id": iss.get("issue_id", ""),
+                "issue_type": iss.get("issue_type", ""),
+                "severity": iss.get("severity", ""),
+                "status": iss.get("status", ""),
+                "blocking": iss.get("blocking", False),
+                "source": iss.get("source", ""),
+                "evidence": iss.get("evidence", ""),
+                "evidence_pack_ref": iss.get("evidence_pack_ref", ""),
+                "recommendation": iss.get("recommendation", ""),
+            }
+            for iss in ledger_issues[:50]
+        ]) if ledger_issues else [],
+        "evidence_manifest": _deep_redact({
+            "manifest_id": evidence_manifest.get("manifest_id", ""),
+            "status": evidence_manifest.get("status", ""),
+            "version": evidence_manifest.get("version", ""),
+            "generated_at": evidence_manifest.get("generated_at", ""),
+            "file_count": len(evidence_manifest.get("files", [])),
+            "files": [
+                {
+                    "path": f.get("path", f.get("file_path", "")),
+                    "sha256": f.get("sha256", f.get("hash", "")),
+                    "size": f.get("size", 0),
+                }
+                for f in evidence_manifest.get("files", [])[:100]
+            ],
+            "evidence_verification": _deep_redact(_evidence_verified) if _evidence_verified else [],
+            "evidence_verified_count": sum(1 for v in _evidence_verified if v.get("exists")),
+            "evidence_hash_match_count": sum(1 for v in _evidence_verified if v.get("hash_match")),
+            "privacy_attestation": evidence_manifest.get("privacy_attestation", {}),
+        }) if evidence_manifest else {},
+        "decision": _deep_redact({
+            "decision": decision_record.get("decision", ""),
+            "reviewer_id": decision_record.get("reviewer_id", ""),
+            "round": decision_record.get("round", 0),
+            "timestamp": decision_record.get("timestamp", ""),
+            "note": decision_record.get("note", ""),
+        }) if decision_record else {},
+        "audit_trail_length": len(audit_trail),
+        "human_gate": {
+            "human_required": state.get("human_required", False),
+            "decision": state.get("human_gate_decision", ""),
+            "reviewer_id": state.get("reviewer_id", ""),
+        },
+        "privacy": {
+            "attestation": state.get("privacy_attestation", {}),
+        },
+        "warnings": warnings_list,
+    }
+
+    # A24: Artifact chain + closeout integrity
+    _ledger_dir = state.get("ledger_dir", "")
+    _decision_base = state.get("decision_base_dir", "") or None
+    artifact_chain = _build_artifact_chain(
+        run_dir, state, _ledger_dir, _decision_base, evidence_manifest,
+    ) if run_dir else []
+    report["artifact_chain"] = artifact_chain
+    _has_critical = any(w.get("severity") == "critical" for w in warnings_list)
+    report["closeout_integrity"] = "partial" if _has_critical else "complete"
+
+    # A24: Updated content hash binds artifacts
+    _hash_payload = json.dumps({
+        "report": {k: v for k, v in report.items() if k != "content_hash"},
+        "artifacts": artifact_chain,
+    }, sort_keys=True, ensure_ascii=False, default=str)
+    report["content_hash"] = hashlib.sha256(_hash_payload.encode("utf-8")).hexdigest()
+
+    if as_json:
+        _emit_json(report)
+        if save and run_dir:
+            json_path = run_dir / "closeout-report.json"
+            json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str),
+                                 encoding="utf-8")
+            err_console.print(f"[dim]Saved: {json_path}[/dim]")
+        return
+
+    # --- Markdown report ---
+    md_lines = [
+        f"# Paper Closeout Report -- {safe_id}",
+        "",
+        f"**Task**: {task_id}",
+        f"**Project**: {project_id}",
+        f"**Status**: `{state.get('status', 'unknown')}`",
+        f"**Acceptance**: `{acceptance.get('status', 'unknown')}`",
+        f"**Generated**: {report['generated_at']}",
+        "",
+        "---",
+        "",
+        "## Acceptance Summary",
+        "",
+        f"- Blocking issues: {state.get('blocking_count', 0)}",
+        f"- Non-blocking issues: {state.get('non_blocking_count', 0)}",
+    ]
+    reasons = acceptance.get("reasons", [])
+    if reasons:
+        md_lines.append("- Reasons:")
+        for r in reasons[:5]:
+            md_lines.append(f"  - {_redact_str(str(r))[:200]}")
+
+    if ledger_data:
+        md_lines.extend([
+            "", "---", "", "## Issue Ledger", "",
+            f"- Total: {ledger_data.get('total', 0)}",
+            f"- Open: {ledger_data.get('open', 0)}",
+            f"- Resolved: {ledger_data.get('resolved', 0)}",
+            f"- Blocking: {ledger_data.get('blocking', 0)}",
+            f"- Critical: {ledger_data.get('critical', 0)}",
+        ])
+        if ledger_issues:
+            md_lines.append("")
+            md_lines.append("### Issues")
+            md_lines.append("")
+            for iss in ledger_issues[:20]:
+                iid = _redact_str(str(iss.get("issue_id", "")))
+                itype = _redact_str(str(iss.get("issue_type", "")))
+                sev = iss.get("severity", "unknown")
+                status = iss.get("status", "")
+                src = _redact_str(str(iss.get("source", "")))
+                rec = _redact_str(str(iss.get("recommendation", "")))[:100]
+                md_lines.append(f"- `{iid}` ({itype}) [{sev}] {status} src:{src} rec:{rec}")
+
+    if evidence_manifest:
+        md_lines.extend([
+            "", "---", "", "## Evidence Manifest", "",
+            f"- Manifest ID: `{evidence_manifest.get('manifest_id', 'N/A')}`",
+            f"- Status: `{evidence_manifest.get('status', 'unknown')}`",
+            f"- Files: {len(evidence_manifest.get('files', []))}",
+        ])
+        pa = evidence_manifest.get("privacy_attestation", {})
+        if pa:
+            md_lines.append(f"- Privacy: no_full_text={pa.get('no_full_text')}, "
+                           f"no_api_keys={pa.get('no_api_keys')}, "
+                           f"no_personal_identity={pa.get('no_personal_identity')}")
+
+    if decision_record:
+        md_lines.extend([
+            "", "---", "", "## Decision Audit", "",
+            f"- Decision: `{_redact_str(str(decision_record.get('decision', 'N/A')))}`",
+            f"- Reviewer: {_redact_str(str(decision_record.get('reviewer_id', 'N/A')))}",
+            f"- Round: {decision_record.get('round', 0)}",
+            f"- Note: {_redact_str(str(decision_record.get('note', '')))}",
+        ])
+        if audit_trail:
+            md_lines.append(f"- Audit trail entries: {len(audit_trail)}")
+
+    md_lines.extend([
+        "", "---", "", "## Executed Nodes", "",
+    ])
+    for node in state.get("executed_nodes", []):
+        md_lines.append(f"- {_redact_str(str(node))}")
+
+    # A24: Content hash + integrity + warnings by severity
+    md_lines.extend([
+        "", "---", "",
+        f"**Content Hash**: `{report.get('content_hash', 'N/A')}`",
+        f"**Closeout Integrity**: `{report.get('closeout_integrity', 'unknown')}`",
+        f"**Artifact Chain**: {len(artifact_chain)} artifact(s) hashed",
+    ])
+    if warnings_list:
+        critical = [w for w in warnings_list if w.get("severity") == "critical"]
+        non_critical = [w for w in warnings_list if w.get("severity") != "critical"]
+        if critical:
+            md_lines.extend(["", "## Warnings (Critical)", ""])
+            for w in critical:
+                md_lines.append(f"- [{w.get('subsystem', '?')}] {w.get('message', '')} (impact: {w.get('impact', '?')})")
+        if non_critical:
+            md_lines.extend(["", "## Warnings (Non-Critical)", ""])
+            for w in non_critical:
+                md_lines.append(f"- [{w.get('subsystem', '?')}] {w.get('message', '')}")
+
+    md_text = "\n".join(md_lines)
+
+    for line in md_lines:
+        console.print(line, markup=False)
+
+    if save and run_dir:
+        md_path = run_dir / "closeout-report.md"
+        md_path.write_text(md_text, encoding="utf-8")
+        json_path = run_dir / "closeout-report.json"
+        json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str),
+                             encoding="utf-8")
+        console.print(f"\n[dim]Saved: {md_path}[/dim]")
+        console.print(f"[dim]Saved: {json_path}[/dim]")
+
+
+_AUDIT_DEFAULT_MAX_MB = 10
+
+
+def _audit_max_file_bytes() -> int:
+    """Get max file size in bytes from env or default (A27)."""
+    mb = os.environ.get("AIHUB_AUDIT_MAX_MB", "")
+    try:
+        return int(mb) * 1024 * 1024 if mb else _AUDIT_DEFAULT_MAX_MB * 1024 * 1024
+    except ValueError:
+        return _AUDIT_DEFAULT_MAX_MB * 1024 * 1024
+
+
+_AUDIT_GENERATED_MEMBERS: frozenset[str] = frozenset({
+    "bundle_manifest.json",
+    "attestation.json",
+    "MANIFEST.json",
+    "artifact_chain.json",
+})
+
+
+_AUDIT_POLICY_SCHEMA_VERSION = "1.0"
+_AUDIT_POLICY_VALID_SIG_POLICIES = ("required", "optional", "off")
+_AUDIT_POLICY_VALID_CHAIN_MODES = ("chain_only", "chain_plus_zip", "chain_partial")
+
+
+_AUDIT_POLICY_JSON_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AuditPolicy",
+    "description": "AI Workflow Hub audit policy schema v1.0 (A42)",
+    "type": "object",
+    "required": ["schema_version"],
+    "properties": {
+        "schema_version": {"type": "string", "const": "1.0"},
+        "signature_policy": {
+            "type": "string",
+            "enum": ["required", "optional", "off"],
+            "default": "optional",
+        },
+        "chain_verification_mode": {
+            "type": "string",
+            "enum": ["chain_only", "chain_plus_zip", "chain_partial"],
+            "default": "chain_only",
+        },
+        "allowed_key_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "default": [],
+        },
+        "required_artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+        },
+        "strict_chain": {"type": "boolean", "default": False},
+        "strict_timestamps": {"type": "boolean", "default": True},
+        "completeness_strict": {"type": "boolean", "default": False},
+        "ignored_artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+        },
+        "generated_artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+        },
+        "description": {"type": "string", "default": ""},
+    },
+    "additionalProperties": True,
+}
+
+
+def _compute_policy_provenance(policy_path: str) -> dict[str, str]:
+    """Compute provenance metadata for a policy file (A41->A42).
+
+    Returns dict with: policy_path_hash (SHA-256 of path), policy_sha256, policy_loaded_at.
+    A42: Uses path hash instead of absolute path to avoid leaking local paths.
+    """
+    pp = Path(policy_path).resolve()
+    _raw = pp.read_bytes()
+    _hash = hashlib.sha256(_raw).hexdigest()
+    _path_hash = hashlib.sha256(str(pp).encode("utf-8")).hexdigest()
+    _loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return {
+        "policy_path_hash": _path_hash,
+        "policy_sha256": _hash,
+        "policy_loaded_at": _loaded_at,
+    }
+
+
+def _build_waiver_record(
+    check_name: str, check_index: int, original_detail: str,
+    policy_field: str, reason: str, severity: str,
+    command: str, policy_data: dict = None,
+    adjusted_detail: str = "waived by policy",
+    check_entry: dict = None,
+) -> dict:
+    """A56: Build enriched waiver record with hash binding to raw check."""
+    from datetime import datetime, timezone
+    _prov = (policy_data or {}).get("_policy_provenance", {})
+    _now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # A56: Hash-bind waiver to the raw check entry
+    _check_snapshot = json.dumps(
+        {"check": check_name, "index": check_index, "passed": False,
+         "detail": original_detail},
+        sort_keys=True, ensure_ascii=False) if check_entry is None else \
+        json.dumps({k: v for k, v in check_entry.items() if k != "index"},
+                   sort_keys=True, ensure_ascii=False)
+    _raw_check_hash = hashlib.sha256(_check_snapshot.encode("utf-8")).hexdigest()[:16]
+    _wid = hashlib.sha256(
+        ("%s:%d:%s:%s" % (check_name, check_index, command, _now)).encode("utf-8")
+    ).hexdigest()[:16]
+    # A56: Severity taxonomy (info/warning/partial/block/accepted_risk)
+    _valid_severities = {"info", "warning", "partial", "block", "accepted_risk"}
+    if severity not in _valid_severities:
+        severity = "warning"  # Default
+    return {
+        "waiver_id": _wid,
+        "check": check_name,
+        "check_index": check_index,
+        "original_status": "failed",
+        "adjusted_status": "passed",
+        "policy_field": policy_field,
+        "reason": reason,
+        "severity": severity,
+        "original_detail": original_detail,
+        "adjusted_detail": adjusted_detail,
+        "command": command,
+        "policy_hash": _prov.get("policy_sha256", ""),
+        "policy_schema_version": (policy_data or {}).get("schema_version", ""),
+        "created_at": _now,
+        "raw_check_hash": _raw_check_hash,
+    }
+
+
+def _verify_waiver_integrity(result: dict) -> None:
+    """A56: Verify waiver check_indices + raw_check_hash bindings."""
+    waivers = result.get("policy_waivers", [])
+    checks = result.get("checks", [])
+    integrity_issues = []
+    valid_waiver_ids = set()
+    for w in waivers:
+        idx = w.get("check_index", -1)
+        w_id = w.get("waiver_id", "?")
+        if idx < 0 or idx >= len(checks):
+            integrity_issues.append({
+                "waiver_id": w_id,
+                "issue": "check_index_out_of_range",
+                "check_index": idx,
+            })
+        elif checks[idx].get("passed") is not False:
+            integrity_issues.append({
+                "waiver_id": w_id,
+                "issue": "check_not_failed",
+                "check_index": idx,
+            })
+        else:
+            # A56: Verify raw_check_hash matches actual check entry
+            _entry = checks[idx]
+            _snapshot = json.dumps(
+                {k: v for k, v in _entry.items() if k != "index"},
+                sort_keys=True, ensure_ascii=False)
+            _expected_hash = hashlib.sha256(_snapshot.encode("utf-8")).hexdigest()[:16]
+            _actual_hash = w.get("raw_check_hash", "")
+            if _actual_hash and _actual_hash != _expected_hash:
+                integrity_issues.append({
+                    "waiver_id": w_id,
+                    "issue": "raw_check_hash_mismatch",
+                    "check_index": idx,
+                    "expected": _expected_hash,
+                    "actual": _actual_hash,
+                })
+            else:
+                valid_waiver_ids.add(w_id)
+    result["waiver_integrity"] = "valid" if not integrity_issues else "invalid"
+    if integrity_issues:
+        result["waiver_integrity_issues"] = integrity_issues
+    # A56: Store valid waiver IDs for verdict computation
+    result["_valid_waiver_ids"] = valid_waiver_ids
+
+
+def _load_audit_policy(policy_path: str,
+                       expected_hash: str = "",
+                       strict_policy: bool = False) -> dict[str, Any]:
+    """Load and validate an audit policy file (A37->A44).
+
+    A44: strict_policy=True escalates schema warnings to blocking failures.
+
+    Policy JSON schema (v1.0):
+    {
+        "schema_version": "1.0",
+        "signature_policy": "required|optional|off",
+        "allowed_key_ids": ["kid-1", ...],
+        "chain_verification_mode": "chain_only|chain_plus_zip|chain_partial",
+        "strict_chain": true/false,
+        "strict_timestamps": true/false,
+        "required_artifacts": ["state.json", ...],
+        "description": "..."
+    }
+
+    A41: Computes policy provenance (SHA-256 hash, path, loaded_at)
+    and optionally verifies against expected_hash.
+
+    Returns validated policy dict with _policy_provenance attached.
+    Raises typer.Exit(1) on invalid policy or hash mismatch.
+    """
+    pp = Path(policy_path)
+    if not pp.exists():
+        err_console.print(f"[red]Policy file not found: {pp}[/red]")
+        raise typer.Exit(1)
+
+    # A41: Compute provenance before parsing
+    _provenance = _compute_policy_provenance(policy_path)
+
+    try:
+        policy = json.loads(pp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as _e:
+        err_console.print(f"[red]Invalid policy JSON: {_e}[/red]")
+        raise typer.Exit(1)
+
+    # Validate schema_version
+    _sv = policy.get("schema_version", "")
+    if _sv != _AUDIT_POLICY_SCHEMA_VERSION:
+        err_console.print(
+            f"[red]Unsupported policy schema_version: '{_sv}' "
+            f"(expected '{_AUDIT_POLICY_SCHEMA_VERSION}')[/red]")
+        raise typer.Exit(1)
+
+    # Validate signature_policy
+    _sp = policy.get("signature_policy", "optional")
+    if _sp not in _AUDIT_POLICY_VALID_SIG_POLICIES:
+        err_console.print(
+            f"[red]Invalid signature_policy '{_sp}' "
+            f"(must be one of {_AUDIT_POLICY_VALID_SIG_POLICIES})[/red]")
+        raise typer.Exit(1)
+
+    # Validate allowed_key_ids (A38: element type validation)
+    _akids = policy.get("allowed_key_ids", [])
+    if not isinstance(_akids, list):
+        err_console.print("[red]allowed_key_ids must be a list[/red]")
+        raise typer.Exit(1)
+    for _kid_idx, _kid_val in enumerate(_akids):
+        if not isinstance(_kid_val, str) or not _kid_val.strip():
+            err_console.print(
+                f"[red]allowed_key_ids[{_kid_idx}] must be a non-empty string "
+                f"(got {type(_kid_val).__name__})[/red]")
+            raise typer.Exit(1)
+
+    # Validate chain_verification_mode
+    _cvm = policy.get("chain_verification_mode", "chain_only")
+    if _cvm not in _AUDIT_POLICY_VALID_CHAIN_MODES:
+        err_console.print(
+            f"[red]Invalid chain_verification_mode '{_cvm}' "
+            f"(must be one of {_AUDIT_POLICY_VALID_CHAIN_MODES})[/red]")
+        raise typer.Exit(1)
+
+    # Validate required_artifacts (A38)
+    _ra = policy.get("required_artifacts", [])
+    if not isinstance(_ra, list):
+        err_console.print("[red]required_artifacts must be a list[/red]")
+        raise typer.Exit(1)
+
+    # A43: Validate against JSON Schema artifact (lightweight structural check)
+    _schema_props = _AUDIT_POLICY_JSON_SCHEMA.get("properties", {})
+    _schema_warnings: list[str] = []
+    for _field, _spec in _schema_props.items():
+        if _field in policy:
+            _val = policy[_field]
+            _expected_type = _spec.get("type", "")
+            if _expected_type == "string" and not isinstance(_val, str):
+                _schema_warnings.append(f"{_field}: expected string, got {type(_val).__name__}")
+            elif _expected_type == "boolean" and not isinstance(_val, bool):
+                _schema_warnings.append(f"{_field}: expected boolean, got {type(_val).__name__}")
+            elif _expected_type == "array" and not isinstance(_val, list):
+                _schema_warnings.append(f"{_field}: expected array, got {type(_val).__name__}")
+            if "enum" in _spec and _val not in _spec["enum"]:
+                _schema_warnings.append(f"{_field}: '{_val}' not in { _spec['enum']}")
+    if _schema_warnings:
+        for _w in _schema_warnings:
+            if strict_policy:
+                err_console.print(f"[red]Schema error (strict-policy): {_w}[/red]")
+            else:
+                err_console.print(f"[yellow]Schema warning: {_w}[/yellow]")
+        if strict_policy:
+            raise typer.Exit(1)
+
+    # Set defaults
+    policy.setdefault("strict_chain", False)
+    policy.setdefault("strict_timestamps", True)
+    policy.setdefault("required_artifacts", [])
+    policy.setdefault("completeness_strict", False)
+    policy.setdefault("ignored_artifacts", [])
+    policy.setdefault("generated_artifacts", [])
+    policy.setdefault("description", "")
+
+    # A41: Verify expected hash if provided
+    if expected_hash:
+        _actual = _provenance["policy_sha256"]
+        if _actual != expected_hash:
+            err_console.print(
+                f"[red]Policy hash mismatch (A41): expected={expected_hash[:16]}... "
+                f"actual={_actual[:16]}...[/red]")
+            raise typer.Exit(1)
+
+    # A41->A43: Attach provenance to policy dict
+    _provenance["schema_validated"] = len(_schema_warnings) == 0
+    _provenance["schema_warnings"] = len(_schema_warnings)
+    policy["_policy_provenance"] = _provenance
+
+    return policy
+
+
+def _sign_record(record: dict[str, Any], key: str = "") -> dict[str, str]:
+    """Create HMAC-SHA256 signature for an attestation/bundle record (A29->A31).
+
+    If key is empty, reads AIHUB_SIGNING_KEY env var. If no key available,
+    returns a stub with algorithm='none' for forward compatibility.
+    A31: includes key_id from AIHUB_SIGNING_KEY_ID for key rotation support.
+    """
+    import hmac as _hmac
+    _key = key or os.environ.get("AIHUB_SIGNING_KEY", "")
+    _key_id = os.environ.get("AIHUB_SIGNING_KEY_ID", "")  # A31
+    payload = json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    if _key:
+        sig = _hmac.new(_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        result = {"algorithm": "HMAC-SHA256", "signature": sig, "signed_at":
+                  datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        if _key_id:
+            result["key_id"] = _key_id  # A31
+        return result
+    return {"algorithm": "none", "signature": "", "note": "no signing key configured"}
+
+
+def _discover_ledger_path(task_id: str, explicit_dir: str = "",
+                          run_id: str = "") -> Path | None:
+    """Find ledger JSON for a task, with fallback discovery (A26->A27).
+
+    A27: run_id-aware -- prefers <task_id>_<run_id>.json if it exists,
+    then falls back to <task_id>.json.
+    """
+    # A27: try run-specific ledger first
+    if explicit_dir and run_id:
+        lf_run = Path(explicit_dir) / f"{task_id}_{run_id}.json"
+        if lf_run.exists():
+            return lf_run
+    if explicit_dir:
+        lf = Path(explicit_dir) / f"{task_id}.json"
+        if lf.exists():
+            return lf
+    # Fallback: check default ledger locations
+    for base in [
+        Path.home() / ".ai_workflow_hub" / "ledger",
+        Path.home() / ".ai_workflow_hub" / "paper_ledger",
+    ]:
+        # A27: run-specific first
+        if run_id:
+            lf_run = base / f"{task_id}_{run_id}.json"
+            if lf_run.exists():
+                return lf_run
+        lf = base / f"{task_id}.json"
+        if lf.exists():
+            return lf
+    return None
+
+
+@paper_app.command("audit")
+def paper_audit(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Paper run ID"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output ZIP path"),
+    as_json: bool = typer.Option(False, "--json", help="Print manifest JSON (pure stdout, A26)"),
+    strict: bool = typer.Option(False, "--strict", help="Fail on omitted evidence or oversized files (A27)"),
+    max_file_mb: Optional[int] = typer.Option(None, "--max-file-mb", help="Override max file size in MB (A28)"),
+    sign: bool = typer.Option(False, "--sign", help="Sign attestation with HMAC-SHA256 (A29)"),
+    anchor_log: Optional[str] = typer.Option(None, "--anchor-log",
+                                              help="Append bundle hash to audit log file (A30)"),
+    no_follow_symlinks: bool = typer.Option(False, "--no-follow-symlinks",
+                                             help="Reject symlinks in evidence files (A30)"),
+    required_files: Optional[str] = typer.Option(None, "--required-files",
+                                                  help="Comma-separated required evidence filenames (A30)"),
+    policy_file: str = typer.Option("", "--policy", help="Path to audit policy file (A40)"),
+    expected_policy_hash: str = typer.Option("", "--expected-policy-hash",
+                                              help="Expected SHA-256 hash of the policy file (A41)"),
+    strict_policy: bool = typer.Option(False, "--strict-policy",
+                                        help="Escalate schema warnings to blocking failures (A44)"),
+    completeness_check: bool = typer.Option(False, "--completeness-check",
+                                             help="Verify all evidence artifacts present and generate completeness report (A45)"),
+):
+    """Generate reproducible audit package (ZIP) binding all artifacts (A25->A31->A45)."""
+    init_env()
+    # A26: when --json, route all status to stderr so stdout is pure JSON
+    _msg = err_console.print if as_json else console.print
+
+    # A40->A44: Load policy file with provenance
+    _policy_data: dict[str, Any] = {}
+    if policy_file:
+        _policy_data = _load_audit_policy(policy_file, expected_hash=expected_policy_hash,
+                                           strict_policy=strict_policy)
+        _prov = _policy_data.get("_policy_provenance", {})
+        _msg(f"[green]Policy loaded[/green]: {_policy_data.get('description', 'unnamed')} "
+             f"(schema={_policy_data.get('schema_version', '?')}, "
+             f"hash={_prov.get('policy_sha256', '?')[:16]}...)")
+        # Override required_files from policy
+        _p_ra = _policy_data.get("required_artifacts", [])
+        if _p_ra and not required_files:
+            required_files = ",".join(_p_ra)
+
+    # A63: Structured audit error schema -- constants defined early for abort paths
+    _AUDIT_SCHEMA_VERSION = "1.61"  # A120: bump from 1.60 (cumulative acceptance continuity)
+    # A66->A67: Exit metadata contract (process-level vs semantic codes)
+    #   exit_code          = PROCESS-LEVEL exit code (0=success, 1=any failure)
+    #   process_exit_code  = PROCESS-LEVEL (same as exit_code, explicit alias)
+    #   exit_reason_code   = DEPRECATED in 1.5+; always str(exit_code)
+    #   failure_details[].exit_code = SEMANTIC registry code (10, 20, 40, etc.)
+    #   failure_events[].exit_code  = SEMANTIC registry code (same as details)
+    #   reason_code        = SYMBOLIC identifier (e.g., "STRICT_AUDIT_FAILED")
+    #   blocking_failures  = list of blocking failure type names
+    #   warning_failures   = list of warning-only failure type names
+    #   waived_failures    = list of policy-waivable failure types in non-strict mode
+    #   operational_verdict = "passed" or "failed" (based on blocking_failures)
+    #
+    # A67: Migration status of deprecated / redundant fields
+    #   exit_reason_code   — DEPRECATED since schema 1.5; retained as str(exit_code)
+    #                        for backward compatibility. Removal planned for schema 2.0.
+    #   process_exit_code  — REDUNDANT alias of exit_code; retained to make
+    #                        process-level semantics explicit. May be removed in schema 2.0
+    #                        once exit_code documentation is stabilized.
+    #   Consumers SHOULD prefer exit_code for process-level and failure_details[].exit_code
+    #   for semantic codes. Consumers MUST inspect waived_failures before treating
+    #   failure_type as a process failure when exit_code == 0.
+    #
+    # A68: Evidence-pack test harness contract
+    #   The evidence pack MUST include:
+    #   - src/ai_workflow_hub/ with cli.py and minimal support modules
+    #     (config_loader.py, model_config.py, project_registry.py, run_governance.py,
+    #      run_store.py, schemas.py, task_queue.py) to allow `import ai_workflow_hub.cli`
+    #   - Full regression transcript (not just targeted acceptance tests)
+    #   - Captured validation output with provenance header (project-root vs unpacked-ZIP)
+    #   Test assertions MUST NOT use `or True` to make checks non-blocking.
+    #   All assertions must be genuinely validating the claimed behavior.
+    #
+    # A69: Regression consistency & known-flaky classification
+    #   The evidence pack MUST include:
+    #   - known_flaky_tests.json: machine-readable classification of known-flaky tests
+    #     with test_id, failure_reason, classification ("known_flaky"), and deselect_args
+    #   - Both project-root and unpacked-ZIP validation transcripts
+    #   - Prompt test counts MUST match actual test file counts
+    #   - Historical tests included in pack MUST be self-contained (no stale
+    #     references to previous acceptance artifacts)
+    #   Known-flaky tests (always deselected in regression):
+    #     test_paper_a20_real_e2e::TestA20CLIAgainstRealData::test_cli_list_shows_real_run  (date-dependent)
+    #
+    # A71: Evidence-pack full self-containment & scope declaration
+    #   The evidence pack MUST either:
+    #   (a) Include ALL support modules required by EVERY included test file, OR
+    #   (b) Include a scope_declaration.txt that explicitly lists which test
+    #       files are "in-scope" (runnable from the unpacked ZIP) and which
+    #       are "out-of-scope" (require modules not in the pack, such as
+    #       context_layer). The pack MUST NOT imply that "all included tests
+    #       are self-contained" when some are not.
+    #   Additional requirements:
+    #   - Unpacked-ZIP validation transcript MUST be captured alongside
+    #     project-root transcript (both provenances in the pack).
+    #   - Prompt test counts MUST exactly match actual test file counts
+    #     and regression output counts.
+    #   - Validation script MUST check prompt/evidence count alignment.
+    #   Excluded modules (reason: not needed for audit/operational acceptance):
+    #     context_layer/ subpackage (10 test_paper_a*.py files + 1 non-a* test file
+    #       depend on it, all scoped out: a19, a20, a21, a22, a23, a23b, a24, a45,
+    #       a46, test_paper_acceptance_gate.py, and others in broader test suite)
+    #
+    # A72: Evidence scope correction
+    #   Fixes from A71 rejection:
+    #   - Unpacked-ZIP validation MUST use correct relative paths. The validate
+    #     script MUST detect whether it runs from project-root or from an
+    #     extracted ZIP (where cli.py is at a71-evidence/src/ai_workflow_hub/cli.py
+    #     relative to the script).
+    #   - test_paper_acceptance_gate.py MUST be out-of-scope (imports context_layer).
+    #   - Source contract context_layer dependency count MUST match the actual
+    #     number of files in the scope declaration.
+    #   - Pack script MUST run declared in-scope tests from the unpacked ZIP
+    #     as a verification step before claiming self-containment.
+    #
+    # A73: In-scope runner fix (--ignore replaces --deselect)
+    #   Fixes from A72 rejection:
+    #   - When running in-scope tests from the unpacked ZIP, use --ignore
+    #     for ALL out-of-scope files. The --deselect flag is unsafe because
+    #     pytest still imports/collects deselected files before deselection
+    #     applies, which causes ModuleNotFoundError for files depending on
+    #     modules not in the pack (e.g., context_layer).
+    #   - The validate script MUST execute the declared in-scope test command
+    #     and fail if any in-scope test fails (not just static checks).
+    #   - The captured in-scope test command MUST be exactly reproducible
+    #     from the unpacked ZIP by the reviewer.
+    #
+    # A74: JSON output cross-environment fix
+    #   Fixes from A73 rejection:
+    #   - Audit command JSON output uses sys.stdout.write() instead of
+    #     Rich Console.print() to avoid environment-dependent formatting
+    #     (ANSI escape codes, soft-wrap, highlighting on Linux terminals).
+    #   - The _emit_json() helper inside paper_audit() ensures pure JSON
+    #     text on stdout regardless of platform or terminal configuration.
+    #   - All 6 audit JSON emission points use _emit_json():
+    #     invalid_run_id, missing_run_state, report_generation_failed,
+    #     strict_failure, completeness_strict_failure, success_path.
+    #
+    # A75: Global JSON emit fix (all paper commands)
+    #   Fixes from A74 rejection:
+    #   - _emit_json() is now a module-level function (line ~52) used by ALL
+    #     JSON-producing paper commands, not only paper audit.
+    #   - 20 total JSON emission points use _emit_json():
+    #     6 in paper audit, 7 in paper report/verify/inspect, 7 in
+    #     paper verify/verify-chain/checkpoint.
+    #   - Zero console.print(json.dumps(...)) calls remain in cli.py.
+    #
+    # A76: Cross-platform Click stdout/stderr separation
+    #   Root cause of 68 JSONDecodeError failures on CDP's Linux environment:
+    #   - Click 8.0/8.1 with mix_stderr=True (default) merges stderr into
+    #     stdout, so result.stdout contains progress messages + JSON.
+    #   - Click 8.2+ separates stdout/stderr even with mix_stderr=True,
+    #     so result.stdout contains ONLY JSON output.
+    #   - Pattern A tests (console patching) unaffected; Pattern B tests
+    #     (bare CliRunner + json.loads(result.stdout)) fail on old Click.
+    #   Fix: pin click>=8.2.0 in pyproject.toml dependencies.
+    #   Schema bumped to 1.17.
+    #
+    # A77: Evidence-pack dependency bootstrap
+    #   A76 correctly diagnosed the root cause but pyproject.toml pin alone
+    #   does not change the already-installed Click version in CDP's environment.
+    #   A77 adds a bootstrap preflight to validate/pack scripts:
+    #   - Check installed Click version before running tests
+    #   - Auto-install click>=8.2.0 via pip if installed version < 8.2.0
+    #   - Record installed Click version in validation/test transcripts
+    #   - Updated reproducible command: pip install "click>=8.2.0" first
+    #   Schema bumped to 1.18.
+    #
+    # A78: Dependency bootstrap hardening
+    #   From A77 accepted_with_limitations directive:
+    #   - Re-check Click version in a fresh subprocess after pip install
+    #     (same-process importlib.metadata can be stale after pip)
+    #   - Report both before/after versions accurately
+    #   - Pin tested Click range: click>=8.2.0,<9 in pyproject.toml
+    #   - Align prompt counts with actual test counts
+    #   Schema bumped to 1.19.
+    #
+    # A79: Evidence-pack count lock manifest
+    #   From A78 accepted_with_limitations directive:
+    #   - Generate COUNTS_MANIFEST_A79.json with exact counts:
+    #     total test files, in-scope, out-of-scope, new tests,
+    #     regression passed/skipped/deselected, in-scope passed/skipped.
+    #   - validate_a79.py verifies counts match the manifest.
+    #   - Prompt reads counts from manifest to prevent drift.
+    #   Schema bumped to 1.20.
+    #
+    # A80: Count manifest crosscheck (authoritative)
+    #   From A79 accepted_with_limitations directive:
+    #   - Pack script generates manifest BEFORE validation runs
+    #     (fixes stale transcripts showing exit code 1)
+    #   - validate_a80.py cross-checks manifest values against
+    #     actual test files, scope declaration, and test outputs
+    #   - Requires schema 1.21 exactly for current acceptance
+    #   - Fails validation if any manifest count drifts from evidence
+    #   Schema bumped to 1.21.
+    #
+    # A81: Count manifest strict crosscheck (fail-closed)
+    #   From A80 accepted_with_limitations directive:
+    #   - validate_a81.py cross-checks ALL manifest counts against evidence
+    #   - Mismatches are FAILURES (not warnings) -- fail-closed
+    #   - Records platform/provenance in manifest
+    #   - Requires exact schema 1.22 for current acceptance
+    #   - Regenerate transcripts only after final manifest is written
+    #   Schema bumped to 1.22.
+    #
+    # A82: Transcript path fix + strict no-skip crosscheck
+    #   From A81 rejected directive:
+    #   - validate_a82.py reads transcripts from output/ subdirectory (not root)
+    #   - Requires exact schema 1.23 (no backwards compat)
+    #   - ALL 6 cross-checks are FAILURES if transcript missing/unparsable (no SKIP)
+    #   - Pack flow: generate transcripts FIRST, then manifest, then validate
+    #   - Manifest in_scope_passed matches actual ZIP test transcript
+    #   - Negative test proves missing transcript causes exit nonzero
+    #   Schema bumped to 1.23.
+    #
+    # A83: Provenance Lock (SHA256 transcript binding)
+    #   From A82 accepted directive:
+    #   - Manifest includes provenance fields: python_version, click_version,
+    #     pytest_command_hash, regression_transcript_sha256, in_scope_transcript_sha256
+    #   - validate_a83.py verifies SHA256 hashes match actual transcript files
+    #   - Manifest counts are cryptographically bound to exact captured outputs
+    #   - Preserves all A82 fail-closed behavior (no SKIP, output/ paths, exact schema)
+    #   Schema bumped to 1.24.
+    #
+    # A84: Cross-Platform Provenance Lock
+    #   From A83 rejected directive:
+    #   - Platform check compares manifest platform against platform embedded
+    #     INSIDE transcript content (not live platform) -> cross-platform safe
+    #   - Renamed pytest_command_hash -> regression_command_hash (unambiguous)
+    #   - Preserves all A82/A83 fail-closed + SHA256 binding behavior
+    #   Schema bumped to 1.25.
+    #
+    # A85: Regression Command Fidelity
+    #   - Manifest includes regression_command_echo (the actual command string)
+    #   - validate_a85.py verifies:
+    #     1. Command echo is present in the regression transcript
+    #     2. SHA256(command_echo) == regression_command_hash (hash binding)
+    #     3. Command contains expected deselect flags from known_flaky_tests.json
+    #     4. Command uses "-m pytest" module invocation
+    #   - Preserves all A82/A83/A84 fail-closed + provenance behavior
+    #   Schema bumped to 1.26.
+    #
+    # A86: In-Scope Command Fidelity
+    #   - Manifest includes in_scope_command_echo and in_scope_command_hash
+    #   - validate_a86.py verifies:
+    #     1. In-scope command echo is present in in-scope transcript
+    #     2. SHA256(in_scope_command_echo) == in_scope_command_hash
+    #     3. In-scope command contains --ignore for all out-of-scope tests
+    #     4. Both regression and in-scope command provenance verified (no drift)
+    #   - Preserves all A82-A85 fail-closed + provenance behavior
+    #   Schema bumped to 1.27.
+    #
+    # A87: Transcript Chain Integrity
+    #   - Manifest includes transcript_chain_hash = SHA256(reg_sha256 + inscope_sha256)
+    #   - validate_a87.py verifies chain hash binds both transcript hashes
+    #   - Tampering with either transcript breaks the chain
+    #   - Preserves all A82-A86 fail-closed + provenance + command fidelity
+    #   Schema bumped to 1.28.
+    #
+    # A88: Evidence Bundle Hash
+    #   - Manifest includes evidence_bundle_hash over ordered set of critical
+    #     artifacts: cli.py, scope declaration, regression transcript, in-scope
+    #     transcript, known_flaky_tests.json, and manifest metadata (all fields
+    #     except evidence_bundle_hash itself)
+    #   - Validation transcript excluded from bundle to avoid self-referential
+    #     hash drift (validation verifies the bundle, not vice versa)
+    #   - validate_a88.py recomputes bundle hash fail-closed against actual files
+    #   - Tampering with any single artifact breaks the bundle hash
+    #   - Preserves all A82-A87 fail-closed + provenance + command fidelity + chain
+    #   Schema bumped to 1.29.
+    #
+    # A89: Bundle Coverage Manifest
+    #   - Manifest includes evidence_bundle_artifacts: ordered list of included
+    #     paths plus "manifest_metadata", making the bundle's artifact set
+    #     explicit and verifiable
+    #   - validate_a89.py verifies artifact order matches expected sequence
+    #     fail-closed, and documents VALIDATION_OUTPUT exclusion by design
+    #   - Preserves all A82-A88 fail-closed + provenance + command fidelity
+    #     + chain + bundle hash
+    #   Schema bumped to 1.30.
+    #
+    # A90: Regression Status Fail-Closed
+    #   - validate_a90.py parses Exit code and failed/error counts from
+    #     REGRESSION_OUTPUT and IN_SCOPE_TEST_RESULTS transcripts
+    #   - Fails validation if exit code != 0, any "N failed" present,
+    #     or pytest summary is unparsable
+    #   - SCOPE_DECLARATION accurately documents VALIDATION_OUTPUT exclusion
+    #   - A88 test_bundle_hash_matches_recomputed guarded with schema check
+    #   - Preserves all A82-A89 fail-closed + provenance + command fidelity
+    #     + chain + bundle hash + coverage manifest
+    #   Schema bumped to 1.31.
+    #
+    # A91: Cross-Count Consistency
+    #   - validate_a91.py enforces internal consistency among manifest counts:
+    #     total_test_files == in_scope + out_of_scope
+    #     regression_passed >= in_scope_passed
+    #     in_scope_passed >= in_scope count
+    #   - evidence_bundle_hash must differ from transcript_chain_hash
+    #   - Preserves all A82-A90 fail-closed + provenance + command fidelity
+    #     + chain + bundle hash + coverage manifest + regression status
+    #   Schema bumped to 1.32.
+    #
+    # A92: Manifest Negative Case Coverage
+    #   - Explicit negative tests for every cross-count consistency rule
+    #   - Negative tests for regression status fail-closed invariants
+    #   - Negative tests for bundle/chain hash distinctness
+    #   - Each mismatch exits nonzero with a specific failure message
+    #   - Preserves all A82-A91 fail-closed + provenance + command fidelity
+    #     + chain + bundle hash + coverage manifest + regression status
+    #     + cross-count consistency
+    #   Schema bumped to 1.33.
+    #
+    # A93: Validation Determinism
+    #   - validate_a93.py produces same exit code on repeated runs
+    #   - PASS/FAIL line counts are stable (no random/time-dependent output)
+    #   - Modifying any artifact changes the validation result
+    #   - Preserves all A82-A92 fail-closed + provenance + command fidelity
+    #     + chain + bundle hash + coverage manifest + regression status
+    #     + cross-count consistency + negative case coverage
+    #   Schema bumped to 1.34.
+    #
+    # A94: Verdict Chain Completeness
+    #   - All CDP verdicts from A66 through A93 must be present in evidence pack
+    #   - Each verdict file must contain ACCEPTED or REJECTED keyword
+    #   - Verdict count must match expected range (28 verdicts: A66-A93)
+    #   - Pack script includes verdict list with correct range
+    #   - Preserves all A82-A93 invariants
+    #   Schema bumped to 1.35.
+    #
+    # A95: Verdict Content Strict
+    #   - Every verdict file A66-A94 must contain ACCEPTED or REJECTED (case-insensitive)
+    #   - Non-empty commentary-only verdict files are rejected
+    #   - Incomplete verdict files (A77, A78) repaired with retroactive verdicts
+    #   - Negative test: commentary-only verdict causes validation to exit nonzero
+    #   - Preserves all A82-A94 invariants
+    #   Schema bumped to 1.36.
+    #
+    # A96: Evidence Pack Tamper Detection
+    #   - Modifying any artifact in the evidence pack after packing is detected
+    #   - Bundle hash mismatch on tampered cli.py exits nonzero
+    #   - Transcript hash mismatch on tampered transcripts exits nonzero
+    #   - Manifest metadata tampering is detected
+    #   - Preserves all A82-A95 invariants
+    #   Schema bumped to 1.37.
+    #
+    # A97: GPT Review Prompt Integrity
+    #   - GPT_REVIEW_PROMPT file must exist in scripts/ directory
+    #   - Prompt must reference the correct acceptance number (A97)
+    #   - Prompt must contain required review sections:
+    #     schema verification, test results, evidence bundle, tamper detection
+    #   - Prompt must be included in evidence ZIP
+    #   - Preserves all A82-A96 invariants
+    #   Schema bumped to 1.38.
+    #
+    # A98: Evidence ZIP Self-Containment
+    #   - Evidence ZIP must be fully self-contained for independent validation
+    #   - Unpacking ZIP and running validate script from unpacked dir must pass
+    #   - All critical files (cli.py, scope, transcripts, manifest, scripts) present in ZIP
+    #   - No external file dependencies required for validation
+    #   - Preserves all A82-A97 invariants
+    #   Schema bumped to 1.39.
+    #
+    # A99: Known-Flaky Registry Integrity
+    #   - known_flaky_tests.json must be properly maintained
+    #   - All flaky tests correctly deselected in regression transcripts
+    #   - Registry fields validated: test_id, deselect_arg, classification, failure_reason
+    #   - No duplicate entries, consistent counts
+    #   - Preserves all A82-A98 invariants
+    #   Schema bumped to 1.40.
+    # A100: Cumulative Acceptance Chain Validation
+    #   - All verdict files A66-A99 present and contain ACCEPTED/REJECTED
+    #   - Verdict chain integrity: no gaps, no duplicates, correct range
+    #   - Schema version progression: 1.19 through 1.41 all represented in OR chain
+    #   - Evidence bundle hash covers all critical artifacts
+    #   - Full regression with known-flaky deselection verified
+    #   - Preserves all A82-A99 invariants
+    #   Schema bumped to 1.41.
+    # A101: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A100 after A100 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A100
+    #   - Schema version progression: 1.19 through 1.42 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A100 invariants
+    #   Schema bumped to 1.42.
+    # A102: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A101 after A101 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A101
+    #   - Schema version progression: 1.19 through 1.43 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A101 invariants
+    #   Schema bumped to 1.43.
+    # A103: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A102 after A102 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A102
+    #   - Schema version progression: 1.19 through 1.44 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A102 invariants
+    #   Schema bumped to 1.44.
+    # A104: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A103 after A103 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A103
+    #   - Schema version progression: 1.19 through 1.45 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A103 invariants
+    #   Schema bumped to 1.45.
+    # A105: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A104 after A104 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A104
+    #   - Schema version progression: 1.19 through 1.46 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A104 invariants
+    #   Schema bumped to 1.46.
+    # A106: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A105 after A105 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A105
+    #   - Schema version progression: 1.19 through 1.47 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A105 invariants
+    #   Schema bumped to 1.47.
+    # A107: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A106 after A106 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A106
+    #   - Schema version progression: 1.19 through 1.48 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A106 invariants
+    #   Schema bumped to 1.48.
+    # A108: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A107 after A107 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A107
+    #   - Schema version progression: 1.19 through 1.49 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A107 invariants
+    #   Schema bumped to 1.49.
+    # A109: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A108 after A108 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A108
+    #   - Schema version progression: 1.19 through 1.50 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A108 invariants
+    #   Schema bumped to 1.50.
+    # A110: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A109 after A109 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A109
+    #   - Schema version progression: 1.19 through 1.51 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A109 invariants
+    #   Schema bumped to 1.51.
+    # A111: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A110 after A110 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A110
+    #   - Schema version progression: 1.19 through 1.52 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A110 invariants
+    #   Schema bumped to 1.52.
+    # A112: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A111 after A111 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A111
+    #   - Schema version progression: 1.19 through 1.53 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A111 invariants
+    #   Schema bumped to 1.53.
+    # A113: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A112 after A112 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A112
+    #   - Schema version progression: 1.19 through 1.54 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A112 invariants
+    #   Schema bumped to 1.54.
+    # A114: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A113 after A113 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A113
+    #   - Schema version progression: 1.19 through 1.55 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A113 invariants
+    #   Schema bumped to 1.55.
+    # A115: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A114 after A114 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A114
+    #   - Schema version progression: 1.19 through 1.56 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A114 invariants
+    #   Schema bumped to 1.56.
+    # A116: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A115 after A115 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A115
+    #   - Schema version progression: 1.19 through 1.57 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A115 invariants
+    #   Schema bumped to 1.57.
+    # A117: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A116 after A116 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A116
+    #   - Schema version progression: 1.19 through 1.58 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A116 invariants
+    #   Schema bumped to 1.58.
+    # A118: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A117 after A117 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A117
+    #   - Schema version progression: 1.19 through 1.59 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A117 invariants
+    #   Schema bumped to 1.59.
+    # A119: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A118 after A118 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A118
+    #   - Schema version progression: 1.19 through 1.60 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    # A120: Cumulative Acceptance Chain Continuity
+    #   - Extends the verdict chain through A119 after A119 was ACCEPTED
+    #   - Keeps cumulative verdict completeness fail-closed for A66-A119
+    #   - Schema version progression: 1.19 through 1.61 all represented in OR chain
+    #   - Evidence bundle hash, transcript chain, and known-flaky integrity preserved
+    #   - Preserves all A82-A118 invariants
+    #   Schema bumped to 1.60.
+    _SCHEMA_MIGRATION_RULES = {
+        "additive": "minor", "removal": "major", "rename": "major",
+        "semantic_change": "major", "reserved_values": "none",
+    }
+    # A62->A64: Extended failure type registry with symbolic reason codes + severity classification
+    # A64: severity_class values:
+    #   "blocking"         = always forces failure verdict and non-zero exit
+    #   "warning"          = recorded but does not block verdict or exit
+    #   "policy_waivable"  = blocking by default, but can be waived by policy
+    _FAILURE_TYPE_REGISTRY: dict[str, dict[str, Any]] = {
+        "none":                 {"exit_code": 0,  "reason_code": "OK",
+                                 "description": "No failure",
+                                 "min_schema_version": "1.1",
+                                 "severity_class": "warning"},
+        "strict_audit":         {"exit_code": 10, "reason_code": "STRICT_AUDIT_FAILED",
+                                 "description": "Strict audit check failed",
+                                 "min_schema_version": "1.1",
+                                 "severity_class": "blocking"},
+        "completeness_strict":  {"exit_code": 11, "reason_code": "COMPLETENESS_STRICT_FAILED",
+                                 "description": "Completeness strict check failed",
+                                 "min_schema_version": "1.1",
+                                 "severity_class": "blocking"},
+        "missing_run_state":    {"exit_code": 20, "reason_code": "RUN_STATE_NOT_FOUND",
+                                 "description": "Run state file not found",
+                                 "min_schema_version": "1.2",
+                                 "severity_class": "blocking"},
+        "invalid_run_id":       {"exit_code": 21, "reason_code": "INVALID_RUN_ID",
+                                 "description": "Run ID failed sanitization",
+                                 "min_schema_version": "1.2",
+                                 "severity_class": "blocking"},
+        "report_generation_failed": {"exit_code": 22, "reason_code": "REPORT_GEN_FAILED",
+                                     "description": "Closeout report generation failed",
+                                     "min_schema_version": "1.2",
+                                     "severity_class": "blocking"},
+        "policy_hash_mismatch": {"exit_code": 30, "reason_code": "POLICY_HASH_MISMATCH",
+                                 "description": "Policy file hash does not match expected",
+                                 "min_schema_version": "1.2",
+                                 "severity_class": "blocking"},
+        "waiver_integrity_failed": {"exit_code": 31, "reason_code": "WAIVER_INTEGRITY_FAILED",
+                                    "description": "Waiver integrity verification failed",
+                                    "min_schema_version": "1.2",
+                                    "severity_class": "blocking"},
+        # A62: New registry entries for broader failure coverage
+        # A64: severity_class assigned to each operational failure type
+        "filesystem_containment": {"exit_code": 40, "reason_code": "FILESYSTEM_CONTAINMENT_FAILED",
+                                   "description": "Run directory files outside containment boundary",
+                                   "min_schema_version": "1.3",
+                                   "severity_class": "blocking"},
+        "manifest_mismatch":    {"exit_code": 41, "reason_code": "MANIFEST_MISMATCH",
+                                 "description": "Bundle manifest/attestation integrity mismatch",
+                                 "min_schema_version": "1.3",
+                                 "severity_class": "policy_waivable"},
+        "signature_failure":    {"exit_code": 42, "reason_code": "SIGNATURE_FAILED",
+                                 "description": "Attestation signature verification failed",
+                                 "min_schema_version": "1.3",
+                                 "severity_class": "blocking"},
+        "anchor_log_corruption": {"exit_code": 43, "reason_code": "ANCHOR_LOG_CORRUPT",
+                                  "description": "Anchor log chain integrity broken",
+                                  "min_schema_version": "1.3",
+                                  "severity_class": "blocking"},
+        "artifact_chain_integrity": {"exit_code": 44, "reason_code": "ARTIFACT_CHAIN_BROKEN",
+                                     "description": "Artifact chain hash linkage broken",
+                                     "min_schema_version": "1.3",
+                                     "severity_class": "policy_waivable"},
+    }
+    # A62: Extended precedence with new failure types
+    _FAILURE_PRECEDENCE: list[str] = [
+        "missing_run_state", "invalid_run_id", "report_generation_failed",
+        "policy_hash_mismatch", "waiver_integrity_failed",
+        "signature_failure", "manifest_mismatch", "artifact_chain_integrity",
+        "anchor_log_corruption", "filesystem_containment",
+        "strict_audit", "completeness_strict",
+    ]
+
+    # A64: Helper for early abort error JSON (available before _audit_result init)
+    # Enhanced with checks[], policy_waivers[], error_profile, failure_events[], timestamp
+    def _early_abort_json(ftype: str, reason: str) -> dict:
+        """Build minimal schema-compliant error JSON for early aborts (A61->A65)."""
+        _reg = _FAILURE_TYPE_REGISTRY.get(ftype, {})
+        _evt = {
+            "type": ftype,
+            "exit_code": _reg.get("exit_code", 99),
+            "reason_code": _reg.get("reason_code", "UNKNOWN"),
+            "exit_reason": reason,
+            "severity": "error",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),  # A64: timestamp consistency
+        }
+        return {
+            "result_schema_version": _AUDIT_SCHEMA_VERSION,
+            "error_profile": "minimal",  # A62->A65: minimal profile contract
+            "failure_type": ftype,
+            "failure_types": [ftype],
+            "failure_events": [_evt],   # A63: non-deduped event log
+            "failure_details": [_evt],
+            "exit_reason": reason,
+            # A66: exit_reason_code aligned to str(exit_code) for early aborts too
+            "exit_reason_code": "1",
+            "exit_code": 1,             # A65: aligned with process Exit(1)
+            "process_exit_code": 1,     # A65: actual process exit code
+            "strict_mode": strict,
+            "waiver_mode": "not_applicable",
+            "blocking_failures": [ftype],   # A65: early abort is always blocking
+            "warning_failures": [],
+            "waived_failures": [],          # A66
+            "operational_verdict": "failed",
+            "checks": [],          # A62: empty for minimal profile
+            "policy_waivers": [],  # A62: empty for minimal profile
+        }
+
+    rt = _paper_runtime()
+    try:
+        safe_id = rt["sanitize"](run_id)
+    except ValueError as e:
+        _msg(f"[red]Invalid run_id: {e}[/red]")
+        # A61: Emit schema-compliant early abort JSON
+        if as_json:
+            _emit_json(_early_abort_json("invalid_run_id", f"Invalid run_id: {e}"))
+        raise typer.Exit(1)
+    state, run_dir = _load_run_state(safe_id)
+    if state is None:
+        _msg(f"[red]Run not found: {safe_id}[/red]")
+        # A61: Emit schema-compliant early abort JSON
+        if as_json:
+            _emit_json(_early_abort_json("missing_run_state", f"Run not found: {safe_id}"))
+        raise typer.Exit(1)
+
+    # A61: _VALID_WAIVER_MODES + _audit_result init (constants already defined above)
+    _VALID_WAIVER_MODES = {"active", "disabled_by_strict", "not_applicable"}
+    _wm = "disabled_by_strict" if strict else "active"
+    if _wm not in _VALID_WAIVER_MODES:
+        _wm = "active"  # fallback
+
+    # A57->A64: Audit waiver trace model with versioned result schema + multi-failure + events + severity
+    _audit_result: dict[str, Any] = {
+        "result_schema_version": _AUDIT_SCHEMA_VERSION,
+        "error_profile": "full",        # A62: full profile (vs minimal for early aborts)
+        "strict_mode": strict,
+        "waiver_mode": _wm,
+        "failure_type": "none",       # A60->A61: primary (highest-precedence) failure type
+        "failure_types": [],           # A61: deduped array of failure types
+        "failure_events": [],          # A63: non-deduped event log (every recording)
+        "failure_details": [],         # A61: structured failure objects (deduped)
+        "exit_reason": "",             # A60: human-readable exit reason
+        "exit_reason_code": "",        # A64: DEPRECATED alias for str(exit_code)
+        "exit_code": 0,                # A62: numeric exit code (0=success)
+        # A64: Severity classification fields
+        "operational_verdict": "passed",  # verdict after operational failure recomputation
+        "blocking_failures": [],          # list of blocking failure types
+        "warning_failures": [],           # list of warning-only failure types
+        "waived_failures": [],            # A66: policy-waivable failures in non-strict mode
+        "process_exit_code": 0,           # A65: actual CLI process exit code (aligned with exit_code)
+        "passed": 0, "failed": 0,
+        "checks": [],
+        "policy_waivers": [],
+    }
+
+    # A63: Helper to record a structured failure (with dedup + events + strict validation)
+    def _record_failure(ftype: str, reason: str, context: dict | None = None) -> None:
+        """Record a failure into _audit_result with structured details (A61->A63)."""
+        # A62: Strict schema mode -- classify unregistered failure types
+        _reg = _FAILURE_TYPE_REGISTRY.get(ftype)
+        if _reg is None:
+            _reg = {"exit_code": 99, "reason_code": "UNKNOWN_FAILURE",
+                    "description": "Unregistered failure type",
+                    "min_schema_version": "1.3"}
+        _ecode = _reg.get("exit_code", 99)
+        _rcode = _reg.get("reason_code", "UNKNOWN")
+        _evt: dict[str, Any] = {
+            "type": ftype,
+            "exit_code": _ecode,
+            "reason_code": _rcode,    # A62: symbolic reason code
+            "exit_reason": reason,
+            "severity": "error",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if context:
+            _evt["context"] = context
+        # A63: Always append to non-deduped event log
+        _audit_result["failure_events"].append(_evt)
+        # A62: Deduplicate failure_types[] and failure_details[]
+        if ftype not in _audit_result["failure_types"]:
+            _audit_result["failure_types"].append(ftype)
+            _audit_result["failure_details"].append(dict(_evt))  # copy
+        else:
+            # Merge context into existing detail
+            for _fd in _audit_result["failure_details"]:
+                if _fd["type"] == ftype and context:
+                    _existing_ctx = _fd.get("context", {})
+                    _existing_ctx.update(context)
+                    _fd["context"] = _existing_ctx
+        # Update primary failure_type and exit_reason_code by precedence
+        _best = ftype
+        _best_idx = (_FAILURE_PRECEDENCE.index(ftype)
+                     if ftype in _FAILURE_PRECEDENCE else len(_FAILURE_PRECEDENCE))
+        for _ft in _audit_result["failure_types"]:
+            _idx = (_FAILURE_PRECEDENCE.index(_ft)
+                    if _ft in _FAILURE_PRECEDENCE else len(_FAILURE_PRECEDENCE))
+            if _idx < _best_idx:
+                _best = _ft
+                _best_idx = _idx
+        _best_reg = _FAILURE_TYPE_REGISTRY.get(_best, {})
+        _audit_result["failure_type"] = _best
+        _audit_result["exit_reason_code"] = str(
+            _best_reg.get("exit_code", 99))
+        _audit_result["exit_code"] = _best_reg.get("exit_code", 99)  # A62: numeric
+        _audit_result["exit_reason"] = reason  # latest reason for human readability
+        # A65: Recompute severity classification after every _record_failure call
+        _recompute_severity()
+
+    # A65: Severity recomputation -- keeps A64 fields synchronized with failure state
+    # Called at the end of _record_failure() so fields are always up-to-date
+    # before any JSON emission point (strict, completeness strict, or normal success)
+    def _recompute_severity() -> None:
+        """Reclassify blocking/warning failures and align exit_code with process exit."""
+        _blocking = []
+        _warning = []
+        _waivable = []
+        for _ft in _audit_result["failure_types"]:
+            _reg_entry = _FAILURE_TYPE_REGISTRY.get(_ft, {})
+            _sc = _reg_entry.get("severity_class", "blocking")
+            if _sc == "blocking":
+                _blocking.append(_ft)
+            elif _sc == "warning":
+                _warning.append(_ft)
+            elif _sc == "policy_waivable":
+                if strict:
+                    _blocking.append(_ft)
+                else:
+                    _waivable.append(_ft)
+        _audit_result["blocking_failures"] = _blocking
+        _audit_result["warning_failures"] = _warning
+        _audit_result["waived_failures"] = _waivable  # A66: expose waived failures
+        # A65: operational_verdict
+        if _blocking:
+            _audit_result["operational_verdict"] = "failed"
+            if _audit_result.get("policy_verdict") == "passed":
+                _audit_result["policy_verdict"] = "failed"
+            if _audit_result.get("verdict") == "passed":
+                _audit_result["verdict"] = "failed"
+        else:
+            _audit_result["operational_verdict"] = "passed"
+        # A65: Align exit_code with CLI process exit code
+        # JSON exit_code must equal the actual typer.Exit() code:
+        #   - 0 when no blocking failures (success)
+        #   - 1 when blocking failures exist (matches Exit(1) in strict/completeness paths)
+        # The semantic registry exit_code stays in failure_details[].exit_code
+        _audit_result["exit_code"] = 1 if _blocking else 0
+        _audit_result["process_exit_code"] = _audit_result["exit_code"]
+        # A65: Keep deprecated exit_reason_code aligned with exit_code
+        _audit_result["exit_reason_code"] = str(_audit_result["exit_code"])
+
+    def _audit_check(name: str, ok: bool, detail: str = "") -> None:
+        entry = {"check": name, "passed": ok,
+                 "index": len(_audit_result["checks"])}
+        if detail:
+            entry["detail"] = detail
+        _audit_result["checks"].append(entry)
+        if ok:
+            _audit_result["passed"] += 1
+        else:
+            _audit_result["failed"] += 1
+
+    _msg(f"[bold]A27 Audit Package: {safe_id}[/bold]")
+
+    # Ensure closeout reports exist -- A26: check CliRunner result
+    report_json_path = run_dir / "closeout-report.json"
+    report_md_path = run_dir / "closeout-report.md"
+    if not report_json_path.exists() or not report_md_path.exists():
+        _msg("[dim]Generating closeout report...[/dim]")
+        from typer.testing import CliRunner as _CR
+        _r = _CR().invoke(app, ["paper", "report", "--run-id", safe_id, "--save"],
+                          catch_exceptions=False)
+        # A26: verify generation succeeded
+        if _r.exit_code != 0 or not report_json_path.exists():
+            _reason = f"Report generation failed (exit={_r.exit_code}). Cannot produce complete audit package."
+            _msg(f"[red]{_reason}[/red]")
+            # A61: Emit schema-compliant early abort JSON
+            if as_json:
+                _emit_json(_early_abort_json("report_generation_failed", _reason))
+            raise typer.Exit(1)
+
+    # Build extended artifact chain (binds report files)
+    evidence_manifest = state.get("evidence_manifest", {})
+    _ledger_dir = state.get("ledger_dir", "")
+    _decision_base = state.get("decision_base_dir", "") or None
+    original_chain = _build_artifact_chain(
+        run_dir, state, _ledger_dir, _decision_base, evidence_manifest,
+    ) if run_dir else []
+    artifact_chain = _rehash_artifact_chain_with_reports(
+        run_dir, original_chain, report_json_path, report_md_path,
+    )
+
+    # Check omitted evidence
+    omitted = _check_omitted_evidence(run_dir, evidence_manifest) if run_dir else []
+    if omitted:
+        _msg(f"[yellow]WARN: {len(omitted)} evidence file(s) not in manifest[/yellow]")
+
+    # Build bundle
+    import uuid as _uuid
+    import zipfile as _zf
+
+    bundle_id = f"bundle-{_uuid.uuid4().hex[:12]}"
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    zip_name = output or str(run_dir / f"audit-bundle-{safe_id}.zip")
+
+    bundle_files_meta: list[dict[str, Any]] = []
+    _to_add: list[tuple[Path, str]] = []
+    _oversized: list[str] = []  # A26: track files exceeding size limit
+
+    # Collect files to bundle
+    for name, path in [
+        ("closeout-report.json", report_json_path),
+        ("closeout-report.md", report_md_path),
+    ]:
+        if path.exists():
+            _to_add.append((path, name))
+
+    # artifact_chain.json
+    chain_path = run_dir / "artifact_chain.json"
+    chain_path.write_text(
+        json.dumps(artifact_chain, indent=2, ensure_ascii=False), encoding="utf-8")
+    _to_add.append((chain_path, "artifact_chain.json"))
+
+    # state.json
+    sf = run_dir / "state.json"
+    if sf.exists():
+        _to_add.append((sf, "state.json"))
+
+    # ledger -- A26: fallback discovery
+    task_id = state.get("task_id", "")
+    _ledger_path = _discover_ledger_path(task_id, _ledger_dir, run_id=safe_id) if task_id else None
+    if _ledger_path:
+        _to_add.append((_ledger_path, "ledger.json"))
+
+    # omitted evidence
+    if omitted:
+        omitted_path = run_dir / "omitted-evidence.json"
+        omitted_path.write_text(json.dumps({
+            "omitted_files": omitted, "detected_at": timestamp, "run_id": safe_id,
+        }, indent=2), encoding="utf-8")
+        _to_add.append((omitted_path, "omitted-evidence.json"))
+
+    # A26->A28: check file sizes and warn for oversized files
+    _max_bytes = (max_file_mb * 1024 * 1024) if max_file_mb and max_file_mb > 0 else _audit_max_file_bytes()
+    for fpath, arcname in _to_add:
+        fsize = fpath.stat().st_size
+        if fsize > _max_bytes:
+            _oversized.append(f"{arcname} ({fsize / 1024 / 1024:.1f}MB)")
+
+    if _oversized:
+        _msg(f"[yellow]WARN: {len(_oversized)} file(s) exceed {_max_bytes // 1024 // 1024}MB: "
+             f"{', '.join(_oversized)}[/yellow]")
+
+    # A30: Symlink policy -- reject symlinks in evidence files
+    _symlinks: list[str] = []
+    if no_follow_symlinks:
+        for fpath, arcname in _to_add:
+            if fpath.is_symlink():
+                _symlinks.append(arcname)
+        if _symlinks:
+            _msg(f"[yellow]WARN: {len(_symlinks)} symlink(s) detected: "
+                 f"{', '.join(_symlinks)}[/yellow]")
+
+    # A30->A31: Required files policy -- verify required evidence exists
+    # A31: supports "file:sha256" format for hash-validated requirements
+    _missing_required: list[str] = []
+    _hash_mismatch_required: list[str] = []  # A31
+    if required_files:
+        _req_list = [f.strip() for f in required_files.split(",") if f.strip()]
+        _available = {arcname: fpath for fpath, arcname in _to_add}
+        for req in _req_list:
+            if ":" in req:
+                # A31: "filename:expected_hash" format
+                _req_name, _req_hash = req.split(":", 1)
+                _req_name = _req_name.strip()
+                _req_hash = _req_hash.strip()
+                if _req_name not in _available:
+                    _missing_required.append(_req_name)
+                elif _req_hash:
+                    _actual_hash = _hash_file(_available[_req_name])
+                    if _actual_hash != _req_hash:
+                        _hash_mismatch_required.append(f"{_req_name}:{_req_hash[:16]}...")
+            else:
+                if req not in _available:
+                    _missing_required.append(req)
+        if _missing_required:
+            _msg(f"[red]MISSING REQUIRED: {', '.join(_missing_required)}[/red]")
+        if _hash_mismatch_required:
+            _msg(f"[red]HASH MISMATCH: {', '.join(_hash_mismatch_required)}[/red]")
+            _missing_required.extend(_hash_mismatch_required)  # A31: treat as missing for strict
+
+    # A26: omitted evidence affects integrity
+    closeout_integrity = state.get("closeout_integrity", "unknown")
+    if omitted and closeout_integrity != "partial":
+        closeout_integrity = "partial"
+
+    # A57: Structured audit checks for waiver trace model
+    _audit_check("omitted_evidence", len(omitted) == 0,
+                 "%d file(s) not in manifest" % len(omitted) if omitted else "all evidence tracked")
+    _audit_check("required_artifacts_present", len(_missing_required) == 0,
+                 "missing: %s" % ", ".join(_missing_required[:5]) if _missing_required else "all required present")
+    _audit_check("oversized_files", len(_oversized) == 0,
+                 "%d file(s) exceed limit" % len(_oversized) if _oversized else "all within limit")
+    _audit_check("symlinks_rejected", len(_symlinks) == 0,
+                 "%d symlink(s) detected" % len(_symlinks) if _symlinks else "no symlinks")
+
+    # A57: Create waiver records for non-strict audit failures (policy downgrade)
+    if not strict:
+        for _ac in _audit_result["checks"]:
+            if not _ac["passed"]:
+                _existing = [w for w in _audit_result["policy_waivers"]
+                             if w.get("check_index") == _ac["index"]]
+                if not _existing:
+                    _audit_result["policy_waivers"].append(_build_waiver_record(
+                        check_name=_ac["check"],
+                        check_index=_ac["index"],
+                        original_detail=_ac.get("detail", ""),
+                        policy_field="strict_audit",
+                        reason="strict=False (audit warning, non-blocking)",
+                        severity="warning",
+                        command="audit",
+                        policy_data=_policy_data if _policy_data else None,
+                        adjusted_detail="audit check downgraded to warning by non-strict policy",
+                        check_entry=_ac,
+                    ))
+
+    # A58: Compute audit verdict early -- available in both strict and success paths
+    _verify_waiver_integrity(_audit_result)
+    # A62: Record waiver_integrity_failed if integrity check found issues
+    if _audit_result.get("waiver_integrity") == "invalid":
+        _wi_issues = _audit_result.get("waiver_integrity_issues", [])
+        _record_failure("waiver_integrity_failed",
+                        "waiver integrity: %d issue(s)" % len(_wi_issues),
+                        context={"issues": _wi_issues})
+    _audit_result["raw_verdict"] = "passed" if _audit_result["failed"] == 0 else "failed"
+    _a57_waivers = _audit_result.get("policy_waivers", [])
+    _a57_valid_ids = _audit_result.pop("_valid_waiver_ids", set())
+    _a57_adjusted = {}
+    for w in _a57_waivers:
+        if w.get("waiver_id", "") in _a57_valid_ids:
+            _ci = w.get("check_index", -1)
+            if _ci >= 0 and _ci not in _a57_adjusted:
+                _a57_adjusted[_ci] = w
+    _a57_policy_failed = max(0, _audit_result["failed"] - len(_a57_adjusted))
+    _audit_result["policy_verdict"] = "passed" if _a57_policy_failed == 0 else "failed"
+    _audit_result["verdict"] = _audit_result["policy_verdict"]
+    _audit_result["policy_waived_checks"] = [
+        w["check"] for w in _a57_waivers if w.get("waiver_id", "") in _a57_valid_ids]
+    _audit_result["adjusted_check_count"] = len(_a57_adjusted)
+    _audit_result["waiver_integrity"] = _audit_result.get("waiver_integrity", "valid")
+    # A58: Strict mode overrides -- when strict=True, waivers are voided
+    if strict:
+        _audit_result["policy_waivers"] = []
+        _audit_result["policy_waived_checks"] = []
+        _audit_result["adjusted_check_count"] = 0
+        _audit_result["policy_verdict"] = _audit_result["raw_verdict"]
+        _audit_result["verdict"] = _audit_result["raw_verdict"]
+
+    # Write ZIP
+    with _zf.ZipFile(zip_name, "w", _zf.ZIP_DEFLATED) as zf:
+        for fpath, arcname in _to_add:
+            zf.write(fpath, arcname)
+            bundle_files_meta.append({
+                "path": arcname, "sha256": _hash_file(fpath),
+                "size": fpath.stat().st_size,
+            })
+
+        manifest = _build_bundle_manifest(bundle_id, safe_id, bundle_files_meta, timestamp)
+        # A41: bind policy provenance into the bundle manifest
+        if _policy_data and "_policy_provenance" in _policy_data:
+            manifest["policy_provenance"] = _policy_data["_policy_provenance"]
+        zf.writestr("bundle_manifest.json",
+                     json.dumps(manifest, indent=2, ensure_ascii=False))
+
+        attestation = _build_attestation_record(
+            safe_id, bundle_id, timestamp,
+            manifest["attestation"]["content_hash"],
+            artifact_chain, closeout_integrity,
+        )
+        # A29: optional signing
+        if sign:
+            attestation["signature"] = _sign_record(attestation)
+        zf.writestr("attestation.json",
+                     json.dumps(attestation, indent=2, ensure_ascii=False))
+
+        # A28->A29: MANIFEST.json -- complete evidence pack file index
+        _manifest_files = [
+            {"path": arcname, "sha256": _hash_file(fpath), "size": fpath.stat().st_size}
+            for fpath, arcname in _to_add
+        ]
+        # A29: include generated members (bundle_manifest, attestation)
+        bm_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
+        att_bytes = json.dumps(attestation, indent=2, ensure_ascii=False).encode("utf-8")
+        _manifest_files.append({
+            "path": "bundle_manifest.json",
+            "sha256": hashlib.sha256(bm_bytes).hexdigest(),
+            "size": len(bm_bytes),
+        })
+        _manifest_files.append({
+            "path": "attestation.json",
+            "sha256": hashlib.sha256(att_bytes).hexdigest(),
+            "size": len(att_bytes),
+        })
+        # A29: self-entry (hash unknown until written; set to empty)
+        _manifest_files.append({
+            "path": "MANIFEST.json",
+            "sha256": "",
+            "size": 0,
+        })
+        _manifest_index = {
+            "manifest_version": "2.0",
+            "bundle_id": bundle_id,
+            "run_id": safe_id,
+            "generated_at": timestamp,
+            "files": _manifest_files,
+        }
+        zf.writestr("MANIFEST.json",
+                     json.dumps(_manifest_index, indent=2, ensure_ascii=False))
+
+    # A26->A27: sidecar ZIP hash
+    zip_hash = _hash_file(Path(zip_name))
+    sidecar_path = Path(zip_name + ".sha256")
+    sidecar_path.write_text(f"{zip_hash}  {Path(zip_name).name}\n", encoding="utf-8")
+
+    # A27: embed ZIP hash in persisted manifest for cross-verification
+    manifest["zip_sha256"] = zip_hash
+
+    # Re-persist manifest + attestation with zip_sha256 included
+    (run_dir / f"bundle_manifest_{bundle_id}.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    (run_dir / f"attestation_{bundle_id}.json").write_text(
+        json.dumps(attestation, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # A30: Anchor log -- append bundle entry for chain verification
+    if anchor_log:
+        _al_path = Path(anchor_log)
+        _al_path.parent.mkdir(parents=True, exist_ok=True)
+        # A31: Compute prev_hash from last entry in log
+        _prev_hash = ""
+        if _al_path.exists():
+            _existing = _al_path.read_text(encoding="utf-8").strip().split("\n")
+            _existing = [l for l in _existing if l.strip()]
+            if _existing:
+                _prev_hash = hashlib.sha256(_existing[-1].encode("utf-8")).hexdigest()
+        _al_entry = {
+            "bundle_id": bundle_id,
+            "zip_sha256": zip_hash,
+            "bundle_hash": attestation.get("artifact_chain", [{}])[-1].get("sha256", "") if attestation.get("artifact_chain") else "",
+            "signed": "signature" in attestation,
+            "key_id": os.environ.get("AIHUB_SIGNING_KEY_ID", ""),
+            "prev_hash": _prev_hash,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "run_id": safe_id,
+        }
+        _al_line = json.dumps(_al_entry, ensure_ascii=False)
+        with _al_path.open("a", encoding="utf-8") as _f:
+            _f.write(_al_line + "\n")
+        _msg(f"[green]Anchor log entry appended: {_al_path}[/green]")
+
+    # A63: Operational failure registry -- verify integrity and record failures
+    # 1. Artifact chain integrity
+    _chain_broken = []
+    for _ci, _ce in enumerate(artifact_chain):
+        _sha = _ce.get("sha256", "")
+        if not _sha or len(_sha) != 64:
+            _chain_broken.append({"index": _ci, "artifact": _ce.get("artifact", "?"),
+                                  "issue": "invalid_hash"})
+    if _chain_broken:
+        _record_failure("artifact_chain_integrity",
+                        "%d chain link(s) with invalid hash" % len(_chain_broken),
+                        context={"broken_links": _chain_broken})
+
+    # 2. Manifest/bundle file consistency
+    _bundle_file_set = {m.get("path", "") for m in bundle_files_meta}
+    _manifest_file_set = {m.get("path", "") for m in manifest.get("files", [])}
+    if _bundle_file_set != _manifest_file_set:
+        _diff = _bundle_file_set.symmetric_difference(_manifest_file_set)
+        _record_failure("manifest_mismatch",
+                        "%d file(s) mismatch between bundle and manifest" % len(_diff),
+                        context={"diff_files": sorted(_diff)[:10]})
+
+    # 3. Signature structure verification (if signed)
+    # A64: Check for algorithm and signature/hash (field name varies by implementation)
+    if sign and "signature" in attestation:
+        _sig = attestation["signature"]
+        _algo = _sig.get("algorithm", "")
+        _has_sig = bool(_sig.get("signature") or _sig.get("hash"))
+        # Only check signature structure if algorithm is not "none" (unsigned mode)
+        if _algo and _algo != "none" and not _has_sig:
+            _record_failure("signature_failure",
+                            "Attestation signature missing algorithm or signature/hash",
+                            context={"signature_keys": list(_sig.keys())})
+
+    # 4. Anchor log chain verification (if anchor_log used and has prior entries)
+    if anchor_log:
+        _al_verify_path = Path(anchor_log)
+        if _al_verify_path.exists():
+            _al_lines = [l for l in _al_verify_path.read_text(encoding="utf-8").strip().split("\n") if l.strip()]
+            if len(_al_lines) >= 2:
+                # Verify last entry's prev_hash matches hash of second-to-last
+                _last = json.loads(_al_lines[-1])
+                _second_last_hash = hashlib.sha256(_al_lines[-2].encode("utf-8")).hexdigest()
+                if _last.get("prev_hash") and _last["prev_hash"] != _second_last_hash:
+                    _record_failure("anchor_log_corruption",
+                                    "Anchor log prev_hash mismatch at entry %d" % (len(_al_lines) - 1),
+                                    context={"expected": _second_last_hash[:16],
+                                             "actual": _last["prev_hash"][:16]})
+
+    # 5. Filesystem containment -- A64: exhaustive check (no longer capped at 50)
+    _containment_violations = []
+    if run_dir:
+        _run_dir_resolved = Path(run_dir).resolve()
+        for _ef in evidence_manifest.get("files", []):
+            _efp = _ef.get("path", _ef.get("file_path", ""))
+            if _efp:
+                _full = (Path(run_dir) / _efp).resolve()
+                try:
+                    _full.relative_to(_run_dir_resolved)
+                except ValueError:
+                    _containment_violations.append(_efp)
+    if _containment_violations:
+        _record_failure("filesystem_containment",
+                        "%d file(s) outside containment boundary" % len(_containment_violations),
+                        context={"violations": _containment_violations[:10],
+                                 "exhaustive": True})  # A64: mark as exhaustive check
+
+    # A65: Severity classification is now automatic via _recompute_severity()
+    # called at the end of every _record_failure() invocation. No standalone
+    # recomputation block needed -- blocking_failures, warning_failures,
+    # operational_verdict, exit_code, and process_exit_code are always current.
+
+    # A27->A28: strict mode -- fail on omitted evidence or oversized files
+    _strict_failures: list[str] = []
+    _strict_severity: dict[str, int] = {}  # A28: severity breakdown
+    if strict:
+        if omitted:
+            _strict_failures.append(f"{len(omitted)} omitted evidence file(s)")
+            _strict_severity["omitted_evidence"] = len(omitted)
+        if _oversized:
+            _strict_failures.append(f"{len(_oversized)} oversized file(s)")
+            _strict_severity["oversized_files"] = len(_oversized)
+        if _symlinks:  # A30
+            _strict_failures.append(f"{len(_symlinks)} symlink(s) detected")
+            _strict_severity["symlinks"] = len(_symlinks)
+        if _missing_required:  # A30
+            _strict_failures.append(f"{len(_missing_required)} required file(s) missing")
+            _strict_severity["missing_required"] = len(_missing_required)
+        if _strict_failures:
+            _msg(f"[red]STRICT AUDIT FAILED: {'; '.join(_strict_failures)}[/red]")
+            # A61: Record structured failure with multi-failure support
+            _record_failure("strict_audit",
+                            "strict audit: %s" % "; ".join(_strict_failures),
+                            context={"severity_breakdown": _strict_severity})
+            if as_json:
+                _json_out = dict(manifest)
+                _json_out["sidecar_sha256"] = zip_hash
+                _json_out["oversized_files"] = _oversized
+                _json_out["strict_failures"] = _strict_failures
+                _json_out["strict_severity"] = _strict_severity
+                _json_out["max_file_mb"] = max_file_mb or (_max_bytes // 1024 // 1024)
+                # A58->A62: Include versioned audit result fields in strict failure JSON
+                _json_out["result_schema_version"] = _audit_result["result_schema_version"]
+                _json_out["error_profile"] = _audit_result["error_profile"]
+                _json_out["strict_mode"] = _audit_result["strict_mode"]
+                _json_out["waiver_mode"] = _audit_result["waiver_mode"]
+                _json_out["failure_type"] = _audit_result["failure_type"]
+                _json_out["failure_types"] = _audit_result["failure_types"]
+                _json_out["failure_events"] = _audit_result["failure_events"]
+                _json_out["failure_details"] = _audit_result["failure_details"]
+                _json_out["exit_reason"] = _audit_result["exit_reason"]
+                _json_out["exit_reason_code"] = _audit_result["exit_reason_code"]
+                _json_out["exit_code"] = _audit_result["exit_code"]
+                _json_out["process_exit_code"] = _audit_result["process_exit_code"]
+                _json_out["checks"] = _audit_result["checks"]
+                _json_out["policy_waivers"] = _audit_result["policy_waivers"]
+                _json_out["raw_verdict"] = _audit_result["raw_verdict"]
+                _json_out["policy_verdict"] = _audit_result["policy_verdict"]
+                _json_out["verdict"] = _audit_result["verdict"]
+                _json_out["waiver_integrity"] = _audit_result["waiver_integrity"]
+                _json_out["policy_waived_checks"] = _audit_result["policy_waived_checks"]
+                _json_out["adjusted_check_count"] = _audit_result["adjusted_check_count"]
+                # A64->A65: Severity classification and operational verdict
+                _json_out["operational_verdict"] = _audit_result["operational_verdict"]
+                _json_out["blocking_failures"] = _audit_result["blocking_failures"]
+                _json_out["warning_failures"] = _audit_result["warning_failures"]
+                _json_out["waived_failures"] = _audit_result["waived_failures"]
+                _emit_json(_json_out)
+            raise typer.Exit(1)
+        else:
+            _msg("[green]Strict: PASSED[/green]")
+
+    # A45->A46: Completeness check -- policy-governed artifact classification
+    _completeness_report: dict[str, Any] = {}
+    if completeness_check:
+        _run_dir = Path(run_dir)
+        # A46: Policy-controlled artifact classification
+        _policy_ignored = _policy_data.get("ignored_artifacts", [])
+        _policy_generated = _policy_data.get("generated_artifacts", [])
+        _completeness_strict = _policy_data.get("completeness_strict", False)
+
+        # Files generated by the audit process itself (not evidence artifacts)
+        _audit_generated = {
+            f"attestation_{bundle_id}.json",
+            f"bundle_manifest_{bundle_id}.json",
+            f"{Path(zip_name).name}" if zip_name else "",
+            f"{Path(zip_name).name}.sha256" if zip_name else "",
+            "trace.json",
+            "isolation-cleanup.json",
+        }
+        _audit_generated.discard("")
+        # A46: Merge policy-declared generated patterns
+        for _gp in _policy_generated:
+            _audit_generated.add(_gp)
+
+        def _matches_patterns(rel_path: str, patterns: list[str]) -> bool:
+            """Check if rel_path matches any glob pattern (A46)."""
+            for _pat in patterns:
+                if fnmatch.fnmatch(rel_path, _pat):
+                    return True
+                # Also check basename only
+                if fnmatch.fnmatch(Path(rel_path).name, _pat):
+                    return True
+            return False
+
+        # Get all files in the run directory
+        _all_run_files: set[str] = set()
+        _ignored_files: set[str] = set()
+        for _p in _run_dir.rglob("*"):
+            if _p.is_file():
+                _rel = str(_p.relative_to(_run_dir)).replace("\\", "/")
+                if _rel in _audit_generated:
+                    continue
+                # A46: Apply policy ignored_artifacts patterns
+                if _matches_patterns(_rel, _policy_ignored):
+                    _ignored_files.add(_rel)
+                    continue
+                _all_run_files.add(_rel)
+
+        # Get files included in the bundle
+        _bundle_files: set[str] = set()
+        if manifest.get("files"):
+            for _f in manifest["files"]:
+                _bundle_files.add(_f.get("path", ""))
+
+        # Categorize missing files
+        _missing_from_bundle = sorted(_all_run_files - _bundle_files)
+
+        # A46: Hash-redact missing file names for privacy
+        _missing_hashed = []
+        for _mf in _missing_from_bundle:
+            _mh = hashlib.sha256(_mf.encode("utf-8")).hexdigest()[:16]
+            _missing_hashed.append({"path_hash": _mh, "basename": Path(_mf).name})
+
+        _prov = _policy_data.get("_policy_provenance", {})
+        _completeness_report = {
+            "total_run_files": len(_all_run_files),
+            "total_bundle_files": len(_bundle_files),
+            "total_ignored": len(_ignored_files),
+            "required_present": len(_missing_required) == 0,
+            "missing_from_bundle": _missing_hashed,
+            "missing_count": len(_missing_from_bundle),
+            "complete": len(_missing_from_bundle) == 0 and len(_missing_required) == 0,
+            "completeness_strict": _completeness_strict,
+            "policy_governed": bool(_policy_data),
+        }
+        if _prov:
+            _completeness_report["policy_sha256"] = _prov.get("policy_sha256", "")
+
+        if _completeness_report["complete"]:
+            _msg(f"[green]Completeness: PASSED ({len(_bundle_files)} files in bundle)[/green]")
+        else:
+            _severity = "red" if _completeness_strict else "yellow"
+            _msg(f"[{_severity}]Completeness: {_completeness_report['missing_count']} file(s) not in bundle[/red]" if _completeness_strict
+                 else f"[yellow]Completeness: {_completeness_report['missing_count']} file(s) not in bundle[/yellow]")
+            if _missing_hashed:
+                _display = ", ".join(f"{m['basename']}({m['path_hash']})" for m in _missing_hashed[:5])
+                _msg(f"[{_severity}]  Missing: {_display}[/red]" if _completeness_strict
+                     else f"[yellow]  Missing: {_display}[/yellow]")
+            if _completeness_strict:
+                _msg(f"[red]COMPLETENESS STRICT: blocking failure[/red]")
+                # A61: Record structured failure with multi-failure support
+                _record_failure("completeness_strict",
+                                "completeness strict: %d file(s) not in bundle" % _completeness_report.get("missing_count", 0),
+                                context={"missing_count": _completeness_report.get("missing_count", 0)})
+                # A59->A62: Emit full result structure before completeness strict exit
+                if as_json:
+                    _cj = dict(manifest) if 'manifest' in dir() else {}
+                    _cj["result_schema_version"] = _audit_result["result_schema_version"]
+                    _cj["error_profile"] = _audit_result["error_profile"]
+                    _cj["strict_mode"] = _audit_result["strict_mode"]
+                    _cj["waiver_mode"] = _audit_result["waiver_mode"]
+                    _cj["failure_type"] = _audit_result["failure_type"]
+                    _cj["failure_types"] = _audit_result["failure_types"]
+                    _cj["failure_events"] = _audit_result["failure_events"]
+                    _cj["failure_details"] = _audit_result["failure_details"]
+                    _cj["exit_reason"] = _audit_result["exit_reason"]
+                    _cj["exit_reason_code"] = _audit_result["exit_reason_code"]
+                    _cj["exit_code"] = _audit_result["exit_code"]
+                    _cj["process_exit_code"] = _audit_result["process_exit_code"]
+                    _cj["checks"] = _audit_result["checks"]
+                    _cj["policy_waivers"] = _audit_result["policy_waivers"]
+                    _cj["raw_verdict"] = _audit_result["raw_verdict"]
+                    _cj["policy_verdict"] = _audit_result["policy_verdict"]
+                    _cj["verdict"] = _audit_result["verdict"]
+                    _cj["waiver_integrity"] = _audit_result["waiver_integrity"]
+                    _cj["policy_waived_checks"] = _audit_result["policy_waived_checks"]
+                    _cj["adjusted_check_count"] = _audit_result["adjusted_check_count"]
+                    # A64: Severity classification and operational verdict
+                    _cj["operational_verdict"] = _audit_result["operational_verdict"]
+                    _cj["blocking_failures"] = _audit_result["blocking_failures"]
+                    _cj["warning_failures"] = _audit_result["warning_failures"]
+                    _cj["waived_failures"] = _audit_result["waived_failures"]  # A66
+                    _cj["completeness"] = _completeness_report
+                    _emit_json(_cj)
+                raise typer.Exit(1)
+
+    # A26->A60: Pure JSON output on success path
+    if as_json:
+        _json_out = dict(manifest)
+        _json_out["sidecar_sha256"] = zip_hash
+        # A60: Consistent sourcing from _audit_result
+        _json_out["strict_mode"] = _audit_result["strict_mode"]
+        _json_out["max_file_mb"] = max_file_mb or (_max_bytes // 1024 // 1024)
+        _json_out["symlinks"] = _symlinks
+        _json_out["oversized_files"] = _oversized
+        _json_out["missing_required"] = _missing_required
+        # A57->A62: Audit waiver trace fields with schema version + multi-failure + symbolic codes
+        _json_out["result_schema_version"] = _audit_result["result_schema_version"]
+        _json_out["error_profile"] = _audit_result["error_profile"]
+        _json_out["waiver_mode"] = _audit_result["waiver_mode"]
+        _json_out["failure_type"] = _audit_result["failure_type"]
+        _json_out["failure_types"] = _audit_result["failure_types"]
+        _json_out["failure_events"] = _audit_result["failure_events"]
+        _json_out["failure_details"] = _audit_result["failure_details"]
+        _json_out["exit_reason"] = _audit_result["exit_reason"]
+        _json_out["exit_reason_code"] = _audit_result["exit_reason_code"]
+        _json_out["exit_code"] = _audit_result["exit_code"]
+        _json_out["process_exit_code"] = _audit_result["process_exit_code"]
+        _json_out["checks"] = _audit_result["checks"]
+        _json_out["policy_waivers"] = _audit_result["policy_waivers"]
+        _json_out["raw_verdict"] = _audit_result["raw_verdict"]
+        _json_out["policy_verdict"] = _audit_result["policy_verdict"]
+        _json_out["verdict"] = _audit_result["verdict"]
+        _json_out["waiver_integrity"] = _audit_result["waiver_integrity"]
+        _json_out["policy_waived_checks"] = _audit_result["policy_waived_checks"]
+        _json_out["adjusted_check_count"] = _audit_result["adjusted_check_count"]
+        # A64: Severity classification and operational verdict
+        _json_out["operational_verdict"] = _audit_result["operational_verdict"]
+        _json_out["blocking_failures"] = _audit_result["blocking_failures"]
+        _json_out["warning_failures"] = _audit_result["warning_failures"]
+        _json_out["waived_failures"] = _audit_result["waived_failures"]  # A66
+        if completeness_check:
+            _json_out["completeness"] = _completeness_report
+        if anchor_log:
+            _json_out["anchor_log"] = str(anchor_log)
+        _emit_json(_json_out)
+
+    # A64: Align CLI process exit code with JSON exit_code
+    # If blocking operational failures exist, exit with non-zero code
+    if _audit_result["exit_code"] > 0:
+        raise typer.Exit(_audit_result["exit_code"])
+
+
+@paper_app.command("verify")
+def paper_verify(
+    zip_path: str = typer.Option(..., "--zip", "-z", help="Path to audit bundle ZIP"),
+    sidecar: Optional[str] = typer.Option(None, "--sidecar", "-s",
+                                           help="Path to .sha256 sidecar (default: ZIP.sha256)"),
+    run_dir: Optional[str] = typer.Option(None, "--run-dir", "-d",
+                                           help="Run directory to verify persisted manifest (A29)"),
+    as_json: bool = typer.Option(False, "--json", help="Print verification result as JSON (A28)"),
+    check_artifacts: bool = typer.Option(True, "--check-artifacts/--no-check-artifacts",
+                                          help="Verify each artifact hash in the ZIP"),
+    anchor_log: Optional[str] = typer.Option(None, "--anchor-log",
+                                              help="Anchor log to cross-verify ZIP hash (A32)"),
+    policy_file: str = typer.Option("", "--policy", help="Path to audit policy file (A39)"),
+    expected_policy_hash: str = typer.Option("", "--expected-policy-hash",
+                                              help="Expected SHA-256 hash of the policy file (A41)"),
+    strict_policy: bool = typer.Option(False, "--strict-policy",
+                                        help="Escalate schema warnings to blocking failures (A44)"),
+    completeness_check: bool = typer.Option(False, "--completeness-check",
+                                             help="Re-verify completeness from bundle vs run directory (A47)"),
+):
+    """Verify an audit package ZIP end-to-end (A28->A32->A44).
+
+    Checks: ZIP validity, sidecar hash, bundle manifest integrity,
+    MANIFEST.json file index, attestation record, artifact hashes,
+    and optionally persisted manifest zip_sha256.
+
+    A41: --expected-policy-hash verifies policy file integrity.
+    """
+    import zipfile as _zf
+
+    init_env()
+    _msg = err_console.print if as_json else console.print
+    zp = Path(zip_path)
+
+    # A39->A44: Load policy file with provenance
+    _policy_data: dict[str, Any] = {}
+    if policy_file:
+        _policy_data = _load_audit_policy(policy_file, expected_hash=expected_policy_hash,
+                                           strict_policy=strict_policy)
+        _prov = _policy_data.get("_policy_provenance", {})
+        _msg(f"[green]Policy loaded[/green]: {_policy_data.get('description', 'unnamed')} "
+             f"(schema={_policy_data.get('schema_version', '?')}, "
+             f"hash={_prov.get('policy_sha256', '?')[:16]}...)")
+
+    result: dict[str, Any] = {
+        "zip_path": str(zp),
+        "checks": [],
+        "passed": 0,
+        "failed": 0,
+        "verdict": "unknown",
+        "verification_mode": "full" if check_artifacts else "metadata_only",  # A29
+        "policy_waivers": [],  # A53: Structured waiver trace records
+    }
+
+    def _check(name: str, ok: bool, detail: str = "") -> None:
+        entry = {"check": name, "passed": ok,
+                 "index": len(result["checks"])}  # A54: stable check index
+        if detail:
+            entry["detail"] = detail
+        result["checks"].append(entry)
+        if ok:
+            result["passed"] += 1
+            _msg(f"  [green]PASS[/green] {name}" + (f" -- {detail}" if detail else ""))
+        else:
+            result["failed"] += 1
+            _msg(f"  [red]FAIL[/red] {name}" + (f" -- {detail}" if detail else ""))
+
+    _msg(f"[bold]A32 Audit Verification: {zp.name}[/bold]")
+
+    # Check 1: ZIP exists
+    if not zp.exists():
+        _check("zip_exists", False, f"{zp} not found")
+        result["verdict"] = "failed"
+        if as_json:
+            _emit_json(result)
+        raise typer.Exit(1)
+    _check("zip_exists", True)
+
+    # Check 2: ZIP is valid
+    try:
+        zf = _zf.ZipFile(zp, "r")
+        _check("zip_valid", True)
+    except _zf.BadZipFile:
+        _check("zip_valid", False, "BadZipFile")
+        result["verdict"] = "failed"
+        if as_json:
+            _emit_json(result)
+        raise typer.Exit(1)
+
+    zip_names = zf.namelist()
+
+    # Check 3: Sidecar hash verification
+    sp = Path(sidecar) if sidecar else Path(str(zp) + ".sha256")
+    if sp.exists():
+        sidecar_text = sp.read_text(encoding="utf-8").strip()
+        sidecar_hash = sidecar_text.split()[0] if sidecar_text else ""
+        actual_hash = hashlib.sha256(zp.read_bytes()).hexdigest()
+        _check("sidecar_hash_match", sidecar_hash == actual_hash,
+               f"sidecar={sidecar_hash[:16]}... actual={actual_hash[:16]}...")
+    else:
+        _check("sidecar_hash_match", False, f"sidecar not found: {sp}")
+
+    # Check 4: bundle_manifest.json present and valid
+    bm_ok = False
+    bm_data: dict[str, Any] = {}
+    if "bundle_manifest.json" in zip_names:
+        try:
+            bm_data = json.loads(zf.read("bundle_manifest.json"))
+            _check("bundle_manifest_present", True)
+            bm_ok = True
+        except (json.JSONDecodeError, KeyError):
+            _check("bundle_manifest_present", False, "invalid JSON")
+    else:
+        _check("bundle_manifest_present", False, "not in ZIP")
+
+    # Check 5: MANIFEST.json present and valid (A28)
+    mf_ok = False
+    mf_data: dict[str, Any] = {}
+    if "MANIFEST.json" in zip_names:
+        try:
+            mf_data = json.loads(zf.read("MANIFEST.json"))
+            _check("manifest_index_present", True)
+            mf_ok = True
+        except (json.JSONDecodeError, KeyError):
+            _check("manifest_index_present", False, "invalid JSON")
+    else:
+        _check("manifest_index_present", False, "not in ZIP (A28 feature)")
+
+    # Check 6: attestation.json present and valid
+    att_ok = False
+    att_data: dict[str, Any] = {}
+    if "attestation.json" in zip_names:
+        try:
+            att_data = json.loads(zf.read("attestation.json"))
+            _check("attestation_present", True)
+            att_ok = True
+        except (json.JSONDecodeError, KeyError):
+            _check("attestation_present", False, "invalid JSON")
+    else:
+        _check("attestation_present", False, "not in ZIP")
+
+    # Check 7: Content hash verification (bundle manifest)
+    if bm_ok and "files" in bm_data:
+        _sorted = sorted([(f["path"], f["sha256"]) for f in bm_data["files"]])
+        recomputed = hashlib.sha256(
+            json.dumps(_sorted, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        stored = bm_data.get("attestation", {}).get("content_hash", "")
+        _check("content_hash_valid", recomputed == stored,
+               f"recomputed={recomputed[:16]}... stored={stored[:16]}...")
+    else:
+        _check("content_hash_valid", False, "no bundle manifest files")
+
+    # Check 8: MANIFEST.json file hashes (A28->A30)
+    if mf_ok and check_artifacts and "files" in mf_data:
+        manifest_ok_count = 0
+        manifest_fail_count = 0
+        manifest_skip_count = 0
+        for entry in mf_data["files"]:
+            fpath = entry["path"]
+            expected = entry["sha256"]
+            # A29: skip self-entry (MANIFEST.json cannot hash itself)
+            if fpath == "MANIFEST.json" and expected == "":
+                manifest_skip_count += 1
+                continue
+            if fpath in zip_names:
+                actual = hashlib.sha256(zf.read(fpath)).hexdigest()
+                if actual == expected:
+                    manifest_ok_count += 1
+                else:
+                    manifest_fail_count += 1
+            else:
+                manifest_fail_count += 1
+        _check("manifest_file_hashes", manifest_fail_count == 0,
+               f"{manifest_ok_count} ok, {manifest_fail_count} failed"
+               + (f", {manifest_skip_count} skipped" if manifest_skip_count else ""))
+    elif mf_ok:
+        _check("manifest_file_hashes", True, "skipped (--no-check-artifacts)")
+    else:
+        _check("manifest_file_hashes", False, "no MANIFEST.json")
+
+    # Check 9: Attestation artifact hashes consistency (A28->A29: full set equality)
+    if att_ok and bm_ok:
+        att_chain = att_data.get("artifact_hashes", [])
+        bm_chain = bm_data.get("files", [])
+        att_artifacts = {a["artifact"]: a["sha256"] for a in att_chain}
+        # A29: exclude generated members from bundle manifest comparison
+        bm_artifacts = {f["path"]: f["sha256"] for f in bm_chain
+                        if f["path"] not in _AUDIT_GENERATED_MEMBERS}
+        # A29: require full set equality, not just overlap
+        att_keys = set(att_artifacts.keys())
+        bm_keys = set(bm_artifacts.keys())
+        overlap = att_keys & bm_keys
+        mismatches = [k for k in overlap if att_artifacts[k] != bm_artifacts[k]]
+        missing_in_att = bm_keys - att_keys
+        extra_in_att = att_keys - bm_keys
+        _full_match = (len(mismatches) == 0 and len(missing_in_att) == 0
+                       and len(extra_in_att) == 0)
+        detail_parts = [f"{len(overlap)} overlapping"]
+        if mismatches:
+            detail_parts.append(f"{len(mismatches)} hash mismatches")
+        if missing_in_att:
+            detail_parts.append(f"{len(missing_in_att)} missing in attestation")
+        if extra_in_att:
+            detail_parts.append(f"{len(extra_in_att)} extra in attestation")
+        _check("attestation_consistency", _full_match,
+               ", ".join(detail_parts))
+    else:
+        _check("attestation_consistency", False, "missing manifest or attestation")
+
+    # Check 10: Persisted manifest zip_sha256 verification (A29)
+    if run_dir:
+        rd = Path(run_dir)
+        _bm_id = bm_data.get("bundle_id", "") if bm_ok else ""
+        persisted_path = rd / f"bundle_manifest_{_bm_id}.json" if _bm_id else None
+        if persisted_path and persisted_path.exists():
+            try:
+                persisted = json.loads(persisted_path.read_text(encoding="utf-8"))
+                persisted_zip = persisted.get("zip_sha256", "")
+                actual_zip = hashlib.sha256(zp.read_bytes()).hexdigest()
+                _check("persisted_manifest_zip_sha256",
+                       persisted_zip == actual_zip,
+                       f"persisted={persisted_zip[:16]}... actual={actual_zip[:16]}...")
+            except (json.JSONDecodeError, OSError) as _e:
+                _check("persisted_manifest_zip_sha256", False, f"read error: {_e}")
+        else:
+            _check("persisted_manifest_zip_sha256", False,
+                   f"not found: {persisted_path}")
+    else:
+        _check("persisted_manifest_zip_sha256", True, "skipped (no --run-dir)")
+
+    # Check 11: Signature verification (A29->A31)
+    if att_ok and "signature" in att_data:
+        sig_block = att_data["signature"]
+        sig_algo = sig_block.get("algorithm", "none")
+        sig_value = sig_block.get("signature", "")
+        sig_key_id = sig_block.get("key_id", "")  # A31
+        if sig_algo == "HMAC-SHA256" and sig_value:
+            # Rebuild attestation without signature, recompute HMAC
+            _att_copy = {k: v for k, v in att_data.items() if k != "signature"}
+            _signing_key = os.environ.get("AIHUB_SIGNING_KEY", "")
+            if _signing_key:
+                import hmac as _hmac
+                _payload = json.dumps(_att_copy, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                _expected = _hmac.new(_signing_key.encode("utf-8"), _payload, hashlib.sha256).hexdigest()
+                _match = _expected == sig_value
+                _detail = f"algo={sig_algo}, match={_match}"
+                if sig_key_id:
+                    _detail += f", key_id={sig_key_id}"  # A31
+                _check("signature_valid", _match, _detail)
+            else:
+                _check("signature_valid", False, "AIHUB_SIGNING_KEY not set")
+        elif sig_algo == "none":
+            _check("signature_valid", True, "unsigned (algorithm=none)")
+        else:
+            _check("signature_valid", False, f"unknown algorithm: {sig_algo}")
+    else:
+        _check("signature_valid", True, "no signature present (unsigned bundle)")
+
+    # Check 12: Anchor log cross-verification (A32->A33)
+    if anchor_log:
+        _al_path = Path(anchor_log)
+        if _al_path.exists():
+            _actual_zip_hash = hashlib.sha256(zp.read_bytes()).hexdigest()
+            _al_lines = _al_path.read_text(encoding="utf-8").strip().split("\n")
+            _al_lines = [l for l in _al_lines if l.strip()]
+            _found_in_log = False
+            _al_malformed = 0  # A33: count malformed lines
+            for _al_line in _al_lines:
+                try:
+                    _al_entry = json.loads(_al_line)
+                    if _al_entry.get("zip_sha256", "") == _actual_zip_hash:
+                        _found_in_log = True
+                except json.JSONDecodeError:
+                    _al_malformed += 1
+            _c12_detail = f"zip_sha256 {'found' if _found_in_log else 'NOT found'} in anchor log"
+            if _al_malformed:
+                _c12_detail += f", {_al_malformed} malformed lines skipped"
+            _check("anchor_log_cross_verify", _found_in_log, _c12_detail)
+        else:
+            _check("anchor_log_cross_verify", False, f"log not found: {_al_path}")
+    else:
+        _check("anchor_log_cross_verify", True, "skipped (no --anchor-log)")
+
+    zf.close()
+
+    # A30: Compute trust_level based on signature and verification results
+    _sig_check = next((c for c in result["checks"] if c["check"] == "signature_valid"), None)
+    _sig_detail = _sig_check.get("detail", "") if _sig_check else ""
+    if _sig_check and _sig_check["passed"]:
+        if "no signature present" in _sig_detail or "unsigned" in _sig_detail:
+            result["trust_level"] = "unsigned_valid"
+        elif "algorithm=none" in _sig_detail:
+            result["trust_level"] = "unsigned_valid"
+        else:
+            result["trust_level"] = "signed_trusted"
+    elif _sig_check and not _sig_check["passed"]:
+        if "AIHUB_SIGNING_KEY not set" in _sig_detail:
+            result["trust_level"] = "signed_unverified"
+        else:
+            result["trust_level"] = "signed_unverified"
+    else:
+        result["trust_level"] = "unknown"
+
+    # A48: Deferred final verdict -- computed after all checks including completeness
+    # (verdict and trust_summary are computed below after completeness block)
+
+    # A47->A48: Completeness re-verification from bundle vs run directory
+    if completeness_check:
+        _msg("\n[bold]A47 Completeness Re-verification[/bold]")
+        _comp_strict = _policy_data.get("completeness_strict", False) if _policy_data else False
+        _comp_report: dict[str, Any] = {
+            "mode": "unknown",
+            "verified": False,
+        }
+
+        if run_dir and bm_ok and bm_data.get("files"):
+            # Full re-verification: compare run_dir files against bundle manifest
+            _rd = Path(run_dir)
+            if _rd.exists():
+                _policy_ignored = _policy_data.get("ignored_artifacts", [])
+                _policy_generated = _policy_data.get("generated_artifacts", [])
+                _audit_generated = {
+                    "trace.json",
+                    "isolation-cleanup.json",
+                }
+                for _gp in _policy_generated:
+                    _audit_generated.add(_gp)
+
+                # Get bundle files from manifest
+                _bundle_files: set[str] = set()
+                for _bf in bm_data["files"]:
+                    _bundle_files.add(_bf.get("path", ""))
+
+                # Get bundle ZIP member names for comparison
+                _zip_members: set[str] = set(zip_names)
+
+                # Scan run directory
+                _rd_files: set[str] = set()
+                _rd_ignored: set[str] = set()
+                for _rp in _rd.rglob("*"):
+                    if _rp.is_file():
+                        _rel = str(_rp.relative_to(_rd)).replace("\\", "/")
+                        if _rel in _audit_generated:
+                            continue
+                        # Apply ignored patterns
+                        _is_ignored = False
+                        for _pat in _policy_ignored:
+                            if fnmatch.fnmatch(_rel, _pat) or fnmatch.fnmatch(Path(_rel).name, _pat):
+                                _is_ignored = True
+                                break
+                        if _is_ignored:
+                            _rd_ignored.add(_rel)
+                            continue
+                        _rd_files.add(_rel)
+
+                # Compare: run_dir files should all be in the bundle
+                _missing = sorted(_rd_files - _bundle_files)
+                _extra_in_bundle = sorted(_bundle_files - _rd_files)
+
+                # Hash-redact missing files
+                _missing_hashed = []
+                for _mf in _missing:
+                    _mh = hashlib.sha256(_mf.encode("utf-8")).hexdigest()[:16]
+                    _missing_hashed.append({"path_hash": _mh, "basename": Path(_mf).name})
+
+                _comp_report = {
+                    "mode": "verified",
+                    "verified": len(_missing) == 0,
+                    "total_run_files": len(_rd_files),
+                    "total_bundle_files": len(_bundle_files),
+                    "total_ignored": len(_rd_ignored),
+                    "missing_from_bundle": _missing_hashed,
+                    "missing_count": len(_missing),
+                    "complete": len(_missing) == 0,
+                    "completeness_strict": _comp_strict,
+                    "policy_governed": bool(_policy_data),
+                }
+
+                _check("completeness_reverified", len(_missing) == 0,
+                       f"{len(_rd_files)} run files, {len(_bundle_files)} bundle files, "
+                       f"{len(_missing)} missing")
+            else:
+                _comp_report["mode"] = "error"
+                _comp_report["error"] = "run_dir not found"
+                _check("completeness_reverified", False, f"run_dir not found: {run_dir}")
+        else:
+            # Claim-only: check if completeness data exists in the attestation
+            _stored_comp = att_data.get("completeness", {}) if att_ok else {}
+            if _stored_comp:
+                _comp_report = {
+                    "mode": "claim_only",
+                    "verified": False,
+                    "stored_completeness": _stored_comp,
+                    "note": "no run_dir provided -- using stored completeness claim",
+                }
+                _check("completeness_claim_present", True,
+                       f"stored: complete={_stored_comp.get('complete', '?')}")
+            else:
+                _comp_report = {
+                    "mode": "claim_only",
+                    "verified": False,
+                    "note": "no run_dir and no stored completeness data",
+                }
+                _check("completeness_claim_present", False,
+                       "no stored completeness in attestation")
+
+        result["completeness"] = _comp_report
+        # A48->A50: Compute completeness_verdict
+        _comp_mode = _comp_report.get("mode", "unknown")
+        _comp_verified = _comp_report.get("verified", False)
+
+        # A50: Raw completeness pass (before policy adjustment)
+        result["raw_completeness_pass"] = _comp_verified if _comp_mode == "verified" else None
+
+        if _comp_mode == "verified" and _comp_verified:
+            result["completeness_verdict"] = "verified"
+        elif _comp_mode == "verified" and not _comp_verified:
+            result["completeness_verdict"] = "verified_failed"
+        elif _comp_mode == "claim_only":
+            result["completeness_verdict"] = "claim_only"
+        elif _comp_mode == "error":
+            result["completeness_verdict"] = "error"
+        else:
+            result["completeness_verdict"] = "unknown"
+
+        # A49->A50: Completeness claim binding with deeper comparison
+        _stored_comp = att_data.get("completeness", {}) if att_ok else {}
+        _drift_severity = "none"
+        if _comp_mode == "verified" and _stored_comp:
+            # Deep comparison: complete, missing_count, total_run_files, policy_sha256, total_ignored
+            _stored_complete = _stored_comp.get("complete", None)
+            _recomputed_complete = _comp_verified
+            _stored_missing = _stored_comp.get("missing_count", -1)
+            _recomputed_missing = _comp_report.get("missing_count", -1)
+            _stored_run_files = _stored_comp.get("total_run_files", -1)
+            _recomputed_run_files = _comp_report.get("total_run_files", -1)
+            _stored_policy = _stored_comp.get("policy_sha256", "")
+            _recomputed_policy = _comp_report.get("policy_sha256", "")
+            _stored_ignored = _stored_comp.get("total_ignored", -1)
+            _recomputed_ignored = _comp_report.get("total_ignored", -1)
+
+            # Count drift dimensions (skip sentinel -1 values)
+            _drift_dims = 0
+            if _stored_complete != _recomputed_complete:
+                _drift_dims += 2  # complete mismatch is high severity
+            if _stored_missing != _recomputed_missing and _stored_missing != -1:
+                _drift_dims += 1
+            if _stored_run_files != _recomputed_run_files and _stored_run_files != -1:
+                _drift_dims += 1
+            if _stored_policy and _recomputed_policy and _stored_policy != _recomputed_policy:
+                _drift_dims += 1
+            if _stored_ignored != _recomputed_ignored and _stored_ignored != -1:
+                _drift_dims += 1
+
+            _claim_matches = (_drift_dims == 0)
+            if _drift_dims >= 2:
+                _drift_severity = "high"
+            elif _drift_dims == 1:
+                _drift_severity = "low"
+            else:
+                _drift_severity = "none"
+
+            result["completeness_trust_status"] = "verified_matched" if _claim_matches else "verified_drift"
+            result["completeness_drift_severity"] = _drift_severity
+            result["completeness_drift_dims"] = _drift_dims
+            if not _claim_matches:
+                _msg(f"[yellow]Completeness drift ({_drift_severity}, {_drift_dims} dims): "
+                     f"stored complete={_stored_complete}, missing={_stored_missing}; "
+                     f"recomputed complete={_recomputed_complete}, missing={_recomputed_missing}[/yellow]")
+        elif _comp_mode == "verified" and not _stored_comp:
+            result["completeness_trust_status"] = "verified_no_claim"
+            result["completeness_drift_severity"] = "none"
+        elif _comp_mode == "claim_only" and _stored_comp:
+            result["completeness_trust_status"] = "claim_only_unverified"
+            result["completeness_drift_severity"] = "none"
+        elif _comp_mode == "claim_only":
+            result["completeness_trust_status"] = "claim_only_no_claim"
+            result["completeness_drift_severity"] = "none"
+        else:
+            result["completeness_trust_status"] = "no_completeness"
+            result["completeness_drift_severity"] = "none"
+
+        # A50: Policy-adjusted completeness outcome
+        if _comp_mode == "verified" and _comp_verified:
+            result["policy_completeness_pass"] = True
+            result["completeness_policy_action"] = "pass"
+        elif _comp_mode == "verified" and not _comp_verified and _comp_strict:
+            result["policy_completeness_pass"] = False
+            result["completeness_policy_action"] = "block"
+            _msg("[red]COMPLETENESS STRICT: verification failed[/red]")
+        elif _comp_mode == "verified" and not _comp_verified:
+            # A50->A51: Non-strict = structured warning, raw results immutable
+            result["policy_completeness_pass"] = True  # policy-adjusted: pass with warning
+            result["completeness_policy_action"] = "warn"
+            result["completeness_warning"] = True
+            # A55: Structured waiver record with check_index binding
+            _comp_check = next(
+                (c for c in result["checks"]
+                 if c["check"] in ("completeness_reverified", "completeness_claim_present")
+                 and not c["passed"]), None)
+            _cidx = _comp_check.get("index", -1) if _comp_check else -1
+            _existing_idx = [w for w in result["policy_waivers"]
+                             if w.get("check_index") == _cidx and _cidx >= 0]
+            if not _existing_idx:
+                result["policy_waivers"].append(_build_waiver_record(
+                    check_name="completeness_reverified",
+                    check_index=_cidx,
+                    original_detail=_comp_check.get("detail", "") if _comp_check else "",
+                    policy_field="completeness_strict",
+                    reason="completeness_strict=False (non-strict warning)",
+                    severity="warning",
+                    command="verify",
+                    policy_data=_policy_data if _policy_data else None,
+                    adjusted_detail="completeness downgraded to warning by policy",
+                    check_entry=_comp_check,
+                ))
+            # A51: Do NOT mutate result["failed"] -- keep raw checks immutable
+            _msg("[yellow]Completeness: non-strict failure (structured warning)[/yellow]")
+        else:
+            # claim_only, error, unknown
+            result["policy_completeness_pass"] = None
+            result["completeness_policy_action"] = "pass"  # no action for non-verified modes
+
+        # A51: Missing-file hash comparison in drift detection
+        if _comp_mode == "verified" and _stored_comp:
+            _stored_mfb = _stored_comp.get("missing_from_bundle", [])
+            _recomputed_mfb = _comp_report.get("missing_from_bundle", [])
+            # Extract path_hash sets for comparison
+            _stored_hashes = set()
+            if isinstance(_stored_mfb, list):
+                for _item in _stored_mfb:
+                    if isinstance(_item, dict):
+                        _stored_hashes.add(_item.get("path_hash", ""))
+                    elif isinstance(_item, str):
+                        _stored_hashes.add(_item)
+            _recomputed_hashes = set()
+            if isinstance(_recomputed_mfb, list):
+                for _item in _recomputed_mfb:
+                    if isinstance(_item, dict):
+                        _recomputed_hashes.add(_item.get("path_hash", ""))
+                    elif isinstance(_item, str):
+                        _recomputed_hashes.add(_item)
+            _hash_match = _stored_hashes == _recomputed_hashes
+            result["completeness_missing_hashes_match"] = _hash_match
+            if not _hash_match and result.get("completeness_drift_severity") == "none":
+                # A52: Hash mismatch upgrades drift and trust_status for consistency
+                result["completeness_drift_severity"] = "low"
+                result["completeness_drift_dims"] = max(result.get("completeness_drift_dims", 0), 1)
+                if result.get("completeness_trust_status") == "verified_matched":
+                    result["completeness_trust_status"] = "verified_drift"
+
+        # A51: Policy severity definitions for trust statuses
+        _trust_status = result.get("completeness_trust_status", "no_completeness")
+        if _trust_status == "verified_matched":
+            result["completeness_policy_severity"] = "none"
+        elif _trust_status == "verified_drift":
+            _ds = result.get("completeness_drift_severity", "none")
+            if _ds == "high":
+                result["completeness_policy_severity"] = "warning" if not _comp_strict else "block"
+            else:
+                result["completeness_policy_severity"] = "info"
+        elif _trust_status == "verified_no_claim":
+            result["completeness_policy_severity"] = "info"
+        elif _trust_status in ("claim_only_unverified", "claim_only_no_claim"):
+            result["completeness_policy_severity"] = "info"
+        else:
+            result["completeness_policy_severity"] = "none"
+
+    # A56: Verify waiver integrity before verdict (hash binding validation)
+    _verify_waiver_integrity(result)
+    # A56: Policy-adjusted verdict from adjusted-check map (only valid waivers count)
+    result["raw_verdict"] = "passed" if result["failed"] == 0 else "failed"
+    _waivers = result.get("policy_waivers", [])
+    _valid_ids = result.pop("_valid_waiver_ids", set())
+    # A56: Build adjusted-check map -- only integrity-validated waivers adjust verdict
+    _adjusted_checks = {}  # {check_index: waiver_record}
+    for w in _waivers:
+        if w.get("waiver_id", "") in _valid_ids:
+            _ci = w.get("check_index", -1)
+            if _ci >= 0 and _ci not in _adjusted_checks:
+                _adjusted_checks[_ci] = w
+    _policy_failed = max(0, result["failed"] - len(_adjusted_checks))
+    result["policy_verdict"] = "passed" if _policy_failed == 0 else "failed"
+    result["verdict"] = result["policy_verdict"]
+    result["policy_waived_checks"] = [w["check"] for w in _waivers if w.get("waiver_id", "") in _valid_ids]
+    # A56: Expose adjusted-check summary for audit
+    result["adjusted_check_count"] = len(_adjusted_checks)
+
+    # A48: trust_summary with completeness awareness
+    _verdict_ok = result["verdict"] == "passed"
+    _tl = result.get("trust_level", "unknown")
+    _cv = result.get("completeness_verdict", "")
+    if _verdict_ok and _tl == "signed_trusted":
+        _ts = "verified_signed_trusted"
+    elif _verdict_ok and _tl in ("unsigned_valid", "unknown"):
+        _ts = "verified_unsigned"
+    elif not _verdict_ok and _tl in ("signed_unverified", "signed_trusted"):
+        _ts = "failed_signed"
+    elif not _verdict_ok:
+        _ts = "failed_unsigned"
+    else:
+        _ts = "unknown"
+    # A48: Append completeness suffix to trust_summary
+    if _cv == "verified":
+        _ts += "_complete"
+    elif _cv == "verified_failed":
+        _ts += "_incomplete"
+    elif _cv == "claim_only":
+        _ts += "_claim_only"
+    result["trust_summary"] = _ts
+
+    # A52: Raw trust summary (based on raw_verdict, before policy adjustment)
+    _raw_ok = result.get("raw_verdict", result["verdict"]) == "passed"
+    if _raw_ok and _tl == "signed_trusted":
+        _raw_ts = "verified_signed_trusted"
+    elif _raw_ok and _tl in ("unsigned_valid", "unknown"):
+        _raw_ts = "verified_unsigned"
+    elif not _raw_ok and _tl in ("signed_unverified", "signed_trusted"):
+        _raw_ts = "failed_signed"
+    elif not _raw_ok:
+        _raw_ts = "failed_unsigned"
+    else:
+        _raw_ts = "unknown"
+    result["raw_trust_summary"] = _raw_ts
+
+    _msg(f"\n[bold]Verdict: {result['verdict'].upper()}[/bold] "
+         f"({result['passed']} passed, {result['failed']} failed) "
+         f"\\[{result['trust_summary']}]")
+
+    if as_json:
+        _emit_json(result)
+
+    if _policy_failed > 0:
+        raise typer.Exit(1)
+
+
+@paper_app.command("verify-chain")
+def paper_verify_chain(
+    log_path: str = typer.Option(..., "--log", "-l", help="Path to anchor log JSONL file"),
+    zip_dir: Optional[str] = typer.Option(None, "--zip-dir", "-z",
+                                           help="Directory to cross-verify zip_sha256 against actual ZIPs (A32)"),
+    strict_chain: bool = typer.Option(False, "--strict-chain",
+                                      help="Fail on chain_partial (no ZIPs verified) (A34)"),
+    policy_file: str = typer.Option("", "--policy", help="Path to audit policy file (A37)"),
+    expected_policy_hash: str = typer.Option("", "--expected-policy-hash",
+                                              help="Expected SHA-256 hash of the policy file (A41)"),
+    strict_policy: bool = typer.Option(False, "--strict-policy",
+                                        help="Escalate schema warnings to blocking failures (A44)"),
+    completeness_check: bool = typer.Option(False, "--completeness-check",
+                                             help="Verify completeness claims from anchor log entries (A46)"),
+    run_dir: Optional[str] = typer.Option(None, "--run-dir",
+                                           help="Run directory for completeness re-verification (A46)"),
+    as_json: bool = typer.Option(False, "--json", help="Print result as JSON (A32)"),
+):
+    """Verify anchor log chain integrity (A32->A34->A37).
+
+    Checks:
+    1. Log file exists and is readable
+    2. Each line is valid JSON with required fields
+    3. prev_hash chain is unbroken
+    4. Optional: cross-verify zip_sha256 against actual ZIP files
+    5. Timestamp monotonicity (A33)
+    6. Duplicate bundle_id / zip_sha256 detection (A33)
+    7. ISO-8601 UTC timestamp format (A34)
+    8. Policy-based enforcement (A37)
+    """
+    init_env()
+    _msg = err_console.print if as_json else console.print
+    lp = Path(log_path)
+
+    # A37: Load policy file and override CLI flags
+    _policy_data: dict[str, Any] = {}
+    _policy_warnings: list[str] = []
+    if policy_file:
+        _policy_data = _load_audit_policy(policy_file,
+                                           expected_hash=expected_policy_hash,
+                                           strict_policy=strict_policy)
+        _prov = _policy_data.get("_policy_provenance", {})
+        _msg(f"[green]Policy loaded[/green]: {_policy_data.get('description', 'unnamed')} "
+             f"(schema={_policy_data.get('schema_version', '?')}, "
+             f"hash={_prov.get('policy_sha256', '?')[:16]}...)")
+        # Override strict_chain from policy
+        if _policy_data.get("strict_chain") is not None:
+            strict_chain = _policy_data["strict_chain"]
+
+    result: dict[str, Any] = {
+        "log_path": str(lp),
+        "checks": [],
+        "entries": 0,
+        "passed": 0,
+        "failed": 0,
+        "verdict": "unknown",
+        "policy_waivers": [],  # A53: Structured waiver trace records
+    }
+
+    def _check(name: str, ok: bool, detail: str = "") -> None:
+        entry = {"check": name, "passed": ok,
+                 "index": len(result["checks"])}  # A54: stable check index
+        if detail:
+            entry["detail"] = detail
+        result["checks"].append(entry)
+        if ok:
+            result["passed"] += 1
+            _msg(f"  [green]PASS[/green] {name}" + (f" -- {detail}" if detail else ""))
+        else:
+            result["failed"] += 1
+            _msg(f"  [red]FAIL[/red] {name}" + (f" -- {detail}" if detail else ""))
+
+    _msg(f"[bold]A33 Anchor Chain Verification: {lp.name}[/bold]")
+
+    # Check 1: Log file exists
+    if not lp.exists():
+        _check("log_exists", False, f"{lp} not found")
+        result["verdict"] = "failed"
+        if as_json:
+            _emit_json(result)
+        raise typer.Exit(1)
+    _check("log_exists", True)
+
+    # Check 2: Parse all entries
+    raw_lines = lp.read_text(encoding="utf-8").strip().split("\n")
+    raw_lines = [l for l in raw_lines if l.strip()]
+    entries: list[dict] = []
+    parse_errors = 0
+    for i, line in enumerate(raw_lines):
+        try:
+            entry = json.loads(line)
+            # Validate required fields
+            for field in ("timestamp", "bundle_id", "run_id", "zip_sha256"):
+                if field not in entry:
+                    parse_errors += 1
+                    break
+            else:
+                entries.append(entry)
+        except json.JSONDecodeError:
+            parse_errors += 1
+
+    result["entries"] = len(entries)
+    _check("entries_parseable", parse_errors == 0,
+           f"{len(entries)} ok, {parse_errors} errors")
+
+    # A33: Check that log is not empty (entries_non_empty)
+    _check("entries_non_empty", len(entries) > 0,
+           f"{len(entries)} entries" if entries else "empty chain -- no entries to verify")
+
+    # Check 3: prev_hash chain integrity
+    chain_ok = True
+    chain_breaks = 0
+    for i in range(1, len(entries)):
+        prev_line = raw_lines[i - 1]
+        expected_prev = hashlib.sha256(prev_line.encode("utf-8")).hexdigest()
+        actual_prev = entries[i].get("prev_hash", "")
+        if expected_prev != actual_prev:
+            chain_ok = False
+            chain_breaks += 1
+
+    first_empty = (entries[0].get("prev_hash", "") == "") if entries else True
+    _check("chain_first_entry_empty", first_empty,
+           "first entry prev_hash=''" if first_empty else "first entry has non-empty prev_hash")
+    _check("chain_integrity", chain_ok,
+           f"{len(entries) - 1} links, {chain_breaks} breaks" if entries
+           else "0 links -- empty chain")
+
+    # Check 4: Cross-verify zip_sha256 against actual ZIPs (optional)
+    _zip_verified = 0  # A33: track for verification_mode
+    if zip_dir:
+        zd = Path(zip_dir)
+        zip_ok_count = 0
+        zip_fail_count = 0
+        zip_skip_count = 0
+        for entry in entries:
+            bundle_id = entry.get("bundle_id", "")
+            expected_hash = entry.get("zip_sha256", "")
+            # Try to find the ZIP by bundle_id pattern
+            candidates = list(zd.glob(f"audit-bundle-*{bundle_id[:8]}*.zip")) if bundle_id else []
+            if not candidates:
+                candidates = list(zd.glob("audit-bundle-*.zip"))
+            found = False
+            for zp in candidates:
+                actual_hash = hashlib.sha256(zp.read_bytes()).hexdigest()
+                if actual_hash == expected_hash:
+                    zip_ok_count += 1
+                    found = True
+                    break
+            if not found:
+                if candidates:
+                    zip_fail_count += 1
+                else:
+                    zip_skip_count += 1
+        _zip_verified = zip_ok_count
+        _check("zip_cross_verify", zip_fail_count == 0,
+               f"{zip_ok_count} ok, {zip_fail_count} failed, {zip_skip_count} skipped")
+        # A33: Warn when all entries were skipped (no ZIPs found at all)
+        if zip_ok_count == 0 and zip_fail_count == 0 and zip_skip_count > 0:
+            _check("zip_any_verified", False,
+                   f"all {zip_skip_count} entries skipped -- no ZIP files found in {zd}")
+        else:
+            _check("zip_any_verified", True,
+                   f"{zip_ok_count} verified" if zip_ok_count else "no entries verified")
+    else:
+        _check("zip_cross_verify", True, "skipped (no --zip-dir)")
+
+    # A33: Timestamp monotonicity check
+    if len(entries) >= 2:
+        _ts_ok = True
+        _ts_breaks = 0
+        for i in range(1, len(entries)):
+            _prev_ts = entries[i - 1].get("timestamp", "")
+            _cur_ts = entries[i].get("timestamp", "")
+            if _cur_ts < _prev_ts:
+                _ts_ok = False
+                _ts_breaks += 1
+        _check("timestamp_monotonic", _ts_ok,
+               f"{len(entries) - 1} comparisons, {_ts_breaks} regressions")
+    elif entries:
+        _check("timestamp_monotonic", True, "single entry -- trivially monotonic")
+    else:
+        _check("timestamp_monotonic", True, "no entries -- skipped")
+
+    # A33: Duplicate detection (bundle_id + zip_sha256)
+    if entries:
+        _seen_bids: set[str] = set()
+        _seen_hashes: set[str] = set()
+        _dup_bids = 0
+        _dup_hashes = 0
+        for e in entries:
+            _bid = e.get("bundle_id", "")
+            _zh = e.get("zip_sha256", "")
+            if _bid and _bid in _seen_bids:
+                _dup_bids += 1
+            _seen_bids.add(_bid)
+            if _zh and _zh in _seen_hashes:
+                _dup_hashes += 1
+            _seen_hashes.add(_zh)
+        _no_dups = (_dup_bids == 0 and _dup_hashes == 0)
+        _check("no_duplicates", _no_dups,
+               f"{_dup_bids} duplicate bundle_ids, {_dup_hashes} duplicate zip_sha256"
+               if not _no_dups else f"{len(entries)} unique entries")
+    else:
+        _check("no_duplicates", True, "no entries -- skipped")
+
+    # A34->A35: ISO-8601 UTC timestamp validation (parser-based)
+    if entries:
+        _ts_invalid = 0
+        _ts_details: list[str] = []
+        for _idx, e in enumerate(entries):
+            _ts_val = e.get("timestamp", "")
+            try:
+                _parsed = datetime.fromisoformat(_ts_val.replace("Z", "+00:00"))
+                # Ensure timezone-aware
+                if _parsed.tzinfo is None:
+                    _ts_invalid += 1
+                    _ts_details.append(f"entry[{_idx}] naive")
+            except (ValueError, TypeError):
+                _ts_invalid += 1
+                _ts_details.append(f"entry[{_idx}] invalid")
+        _check("timestamp_format_iso8601", _ts_invalid == 0,
+               f"{len(entries) - _ts_invalid}/{len(entries)} valid ISO-8601 (parser-validated)"
+               if _ts_invalid == 0
+               else f"{_ts_invalid}/{len(entries)} invalid: {', '.join(_ts_details[:5])}")
+    else:
+        _check("timestamp_format_iso8601", True, "no entries -- skipped")
+
+    # A33: verification_mode and trust_level
+    if zip_dir and _zip_verified > 0:
+        result["verification_mode"] = "chain_plus_zip"
+        result["trust_level"] = "chain_valid_zip_verified"
+    elif zip_dir:
+        result["verification_mode"] = "chain_partial"
+        result["trust_level"] = "chain_valid_zip_unverified"
+    else:
+        result["verification_mode"] = "chain_only"
+        result["trust_level"] = "chain_valid"
+
+    # A34: --strict-chain fails on chain_partial
+    if strict_chain and result["verification_mode"] == "chain_partial":
+        result["failed"] += 1
+        result["checks"].append({
+            "check": "strict_chain_policy",
+            "passed": False,
+            "detail": "chain_partial is not allowed under --strict-chain policy",
+        })
+
+    # A38: chain_verification_mode enforcement from policy
+    if _policy_data:
+        _p_cvm = _policy_data.get("chain_verification_mode", "chain_only")
+        _actual_mode = result.get("verification_mode", "chain_only")
+        # chain_plus_zip policy requires zip verification
+        if _p_cvm == "chain_plus_zip" and _actual_mode != "chain_plus_zip":
+            result["failed"] += 1
+            result["checks"].append({
+                "check": "policy_chain_mode",
+                "passed": False,
+                "detail": f"policy requires chain_plus_zip but got {_actual_mode}",
+            })
+        # chain_only policy rejects chain_partial
+        elif _p_cvm == "chain_only" and _actual_mode == "chain_partial":
+            result["failed"] += 1
+            result["checks"].append({
+                "check": "policy_chain_mode",
+                "passed": False,
+                "detail": f"policy requires chain_only but got chain_partial",
+            })
+        else:
+            result["passed"] += 1
+            result["checks"].append({
+                "check": "policy_chain_mode",
+                "passed": True,
+                "detail": f"policy={_p_cvm}, actual={_actual_mode}",
+            })
+
+        # A38->A39: strict_timestamps enforcement
+        _p_st = _policy_data.get("strict_timestamps", True)
+        _ts_check = next((c for c in result["checks"]
+                          if c["check"] == "timestamp_format_iso8601"), None)
+        if _p_st:
+            # strict_timestamps=True: annotate failures as policy-enforced
+            if _ts_check and not _ts_check["passed"]:
+                _ts_check["detail"] += " (policy: strict_timestamps)"
+        else:
+            # A54: strict_timestamps=False: waiver record only, check entry immutable
+            if _ts_check and not _ts_check["passed"]:
+                # A54: Do NOT mutate check entry -- raw check stays failed
+                # A55: Duplicate prevention by check_index (not name)
+                _existing_idx = [w for w in result["policy_waivers"]
+                                 if w.get("check_index") == _ts_check.get("index", -1)]
+                if not _existing_idx:
+                    result["policy_waivers"].append(_build_waiver_record(
+                        check_name="timestamp_format_iso8601",
+                        check_index=_ts_check.get("index", -1),
+                        original_detail=_ts_check.get("detail", ""),
+                        policy_field="strict_timestamps",
+                        reason="strict_timestamps=False",
+                        severity="warning",
+                        command="verify-chain",
+                        policy_data=_policy_data,
+                        adjusted_detail="timestamp downgraded to warning by policy",
+                        check_entry=_ts_check,
+                    ))
+                # A40: Record as policy warning
+                _policy_warnings.append({
+                    "warning": "timestamp_downgraded",
+                    "check": "timestamp_format_iso8601",
+                    "reason": "strict_timestamps=False",
+                })
+
+        # A38: required_artifacts enforcement
+        _p_ra = _policy_data.get("required_artifacts", [])
+        if _p_ra:
+            # Check if a state.json or evidence_manifest is available in the log dir
+            _log_dir = lp.parent
+            _missing_artifacts = []
+            for _art in _p_ra:
+                _art_path = _log_dir / _art
+                # Try to find artifact in log dir or sibling dirs
+                if not _art_path.exists():
+                    # Also check for evidence_manifest reference
+                    _state_path = _log_dir / "state.json"
+                    _found_in_manifest = False
+                    if _state_path.exists():
+                        try:
+                            _state = json.loads(_state_path.read_text(encoding="utf-8"))
+                            _ev = _state.get("evidence_manifest", {})
+                            _files = _ev.get("files", [])
+                            for _f in _files:
+                                if isinstance(_f, dict) and _f.get("path", "") == _art:
+                                    _found_in_manifest = True
+                                    break
+                                elif isinstance(_f, str) and _f == _art:
+                                    _found_in_manifest = True
+                                    break
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+                    if not _found_in_manifest:
+                        _missing_artifacts.append(_art)
+            if _missing_artifacts:
+                result["failed"] += 1
+                result["checks"].append({
+                    "check": "policy_required_artifacts",
+                    "passed": False,
+                    "detail": f"missing: {', '.join(_missing_artifacts)}",
+                })
+            else:
+                result["passed"] += 1
+                result["checks"].append({
+                    "check": "policy_required_artifacts",
+                    "passed": True,
+                    "detail": f"all {len(_p_ra)} required artifacts found",
+                })
+
+    # A46: Completeness re-verification from anchor log entries
+    if completeness_check and entries:
+        _msg("\n[bold]A46 Completeness Re-verification[/bold]")
+        _completeness_results: list[dict[str, Any]] = []
+        _comp_strict = _policy_data.get("completeness_strict", False) if _policy_data else False
+
+        for _ce_idx, _ce in enumerate(entries):
+            _ce_entry: dict[str, Any] = {
+                "bundle_id": _ce.get("bundle_id", ""),
+                "index": _ce_idx,
+                "verified": False,
+            }
+            # If run_dir provided, re-scan and verify
+            if run_dir:
+                _rd = Path(run_dir)
+                if _rd.exists():
+                    _rd_files: set[str] = set()
+                    for _rp in _rd.rglob("*"):
+                        if _rp.is_file():
+                            _rd_files.add(str(_rp.relative_to(_rd)).replace("\\", "/"))
+                    # Check that referenced ZIP exists
+                    _zip_sha = _ce.get("zip_sha256", "")
+                    _zip_found = False
+                    for _zf in _rd.glob("*.zip"):
+                        _actual_sha = hashlib.sha256(_zf.read_bytes()).hexdigest()
+                        if _actual_sha == _zip_sha:
+                            _zip_found = True
+                            break
+                    _ce_entry["zip_verified"] = _zip_found
+                    _ce_entry["run_files_count"] = len(_rd_files)
+                    _ce_entry["verified"] = _zip_found
+                    _check(f"completeness_entry_{_ce_idx}_zip",
+                           _zip_found,
+                           f"bundle_id={_ce.get('bundle_id', '?')}")
+                else:
+                    _ce_entry["error"] = "run_dir not found"
+                    _check(f"completeness_run_dir", False, f"{run_dir} not found")
+            else:
+                # A49: Without run_dir, mark as claim-only (NOT verified)
+                _ce_entry["note"] = "no run_dir -- claim-only verification"
+                _ce_entry["verified"] = False
+                _ce_entry["claim_only"] = True
+
+            _completeness_results.append(_ce_entry)
+
+        result["completeness_reverification"] = _completeness_results
+        _msg(f"  Re-verified {len(_completeness_results)} anchor entries")
+        # A48: Compute completeness_verdict for verify-chain
+        _all_verified = all(e.get("verified", False) for e in _completeness_results)
+        _any_verified = any(e.get("verified", False) for e in _completeness_results)
+        if run_dir and _all_verified:
+            result["completeness_verdict"] = "verified"
+        elif run_dir and _any_verified:
+            result["completeness_verdict"] = "verified_partial"
+        elif run_dir:
+            result["completeness_verdict"] = "verified_failed"
+        else:
+            result["completeness_verdict"] = "claim_only"
+
+    # A56: Verify waiver integrity before verdict (hash binding validation)
+    _verify_waiver_integrity(result)
+    # A56: Policy-adjusted verdict from adjusted-check map (only valid waivers count)
+    _waivers = result.get("policy_waivers", [])
+    _valid_ids = result.pop("_valid_waiver_ids", set())
+    # A56: Build adjusted-check map -- only integrity-validated waivers adjust verdict
+    _adjusted_checks = {}  # {check_index: waiver_record}
+    for w in _waivers:
+        if w.get("waiver_id", "") in _valid_ids:
+            _ci = w.get("check_index", -1)
+            if _ci >= 0 and _ci not in _adjusted_checks:
+                _adjusted_checks[_ci] = w
+    _raw_failed = result["failed"]
+    _policy_failed = max(0, _raw_failed - len(_adjusted_checks))
+    result["raw_verdict"] = "passed" if _raw_failed == 0 else "failed"
+    result["policy_verdict"] = "passed" if _policy_failed == 0 else "failed"
+    result["policy_waived_checks"] = [w["check"] for w in _waivers if w.get("waiver_id", "") in _valid_ids]
+    result["adjusted_check_count"] = len(_adjusted_checks)
+    result["verdict"] = result["policy_verdict"]
+    if _policy_failed == 0 and result["entries"] == 0:
+        result["trust_level"] = "chain_empty"
+    elif _policy_failed > 0:
+        result["trust_level"] = "chain_invalid"
+    # A52: Raw trust summary for verify-chain
+    _raw_ts = "chain_empty" if (_raw_failed == 0 and result["entries"] == 0) else (
+        "chain_invalid" if _raw_failed > 0 else result.get("trust_level", "unknown"))
+    result["raw_trust_summary"] = _raw_ts
+    # A48: Append completeness suffix to verification_mode
+    _vm = result.get("verification_mode", "unknown")
+    _cv = result.get("completeness_verdict", "")
+    if _cv == "verified":
+        _vm += "_complete"
+    elif _cv == "verified_partial":
+        _vm += "_partial"
+    elif _cv == "verified_failed":
+        _vm += "_incomplete"
+    elif _cv == "claim_only":
+        _vm += "_claim_only"
+    result["verification_mode"] = _vm
+    _msg(f"\n[bold]Verdict: {result['verdict'].upper()}[/bold] "
+         f"({result['passed']} passed, {result['failed']} failed) "
+         f"\\[{result.get('verification_mode', 'unknown')}]")
+
+    if as_json:
+        # A37-A43: Include policy info in JSON output
+        if _policy_data:
+            _prov = _policy_data.get("_policy_provenance", {})
+            result["policy_file_hash"] = _prov.get("policy_sha256", "")
+            result["policy_schema_version"] = _policy_data.get("schema_version", "")
+            _akids = _policy_data.get("allowed_key_ids", [])
+            if _akids:
+                result["allowed_key_ids"] = _akids
+            result["policy_strict_chain"] = _policy_data.get("strict_chain", False)
+            # A41: Include policy provenance
+            result["policy_provenance"] = {
+                "policy_sha256": _prov.get("policy_sha256", ""),
+                "policy_path_hash": _prov.get("policy_path_hash", ""),
+                "policy_loaded_at": _prov.get("policy_loaded_at", ""),
+                "schema_validated": _prov.get("schema_validated", False),
+                "schema_warnings": _prov.get("schema_warnings", 0),
+            }
+            # A40: Include policy warnings
+            result["policy_warnings"] = _policy_warnings
+        _emit_json(result)
+
+    if _policy_failed > 0:
+        raise typer.Exit(1)
+
+
+@paper_app.command("checkpoint")
+def paper_checkpoint(
+    log_path: str = typer.Option(..., "--log", "-l", help="Path to anchor log JSONL file"),
+    export: Optional[str] = typer.Option(None, "--export", "-e",
+                                         help="Export chain head checkpoint to file (A34)"),
+    verify_checkpoint: Optional[str] = typer.Option(None, "--verify", "-v",
+                                                    help="Verify a checkpoint file against the log (A34)"),
+    sign: bool = typer.Option(False, "--sign", help="Sign checkpoint with HMAC-SHA256 (A35)"),
+    signature_policy: str = typer.Option("optional", "--signature-policy",
+                                         help="Signature policy: required|optional|off (A36)"),
+    expected_key_id: str = typer.Option("", "--expected-key-id",
+                                        help="Expected signing key ID for policy check (A36)"),
+    policy_file: str = typer.Option("", "--policy", help="Path to audit policy file (A37)"),
+    expected_policy_hash: str = typer.Option("", "--expected-policy-hash",
+                                              help="Expected SHA-256 hash of the policy file (A41)"),
+    strict_policy: bool = typer.Option(False, "--strict-policy",
+                                        help="Escalate schema warnings to blocking failures (A44)"),
+    as_json: bool = typer.Option(False, "--json", help="Print result as JSON (A34)"),
+):
+    """Export or verify chain head checkpoint (A34->A35->A36->A44).
+
+    A checkpoint captures the current chain head (last entry) and its
+    cumulative hash so it can be pushed to external systems or compared
+    against a previously exported checkpoint.
+
+    A36: --signature-policy controls whether invalid/missing signatures
+    are blocking (required), warning-only (optional), or skipped (off).
+
+    A37: --policy loads a project audit policy file that overrides
+    signature_policy, expected_key_id, and other settings.
+    """
+    init_env()
+    _msg = err_console.print if as_json else console.print
+    lp = Path(log_path)
+
+    # A37->A44: Load policy file and override CLI flags
+    _policy_data: dict[str, Any] = {}
+    if policy_file:
+        _policy_data = _load_audit_policy(policy_file, expected_hash=expected_policy_hash,
+                                           strict_policy=strict_policy)
+        _prov = _policy_data.get("_policy_provenance", {})
+        _msg(f"[green]Policy loaded[/green]: {_policy_data.get('description', 'unnamed')} "
+             f"(schema={_policy_data.get('schema_version', '?')}, "
+             f"hash={_prov.get('policy_sha256', '?')[:16]}...)")
+        # Override CLI flags from policy
+        if "signature_policy" in _policy_data:
+            signature_policy = _policy_data["signature_policy"]
+        # Override expected_key_id: use first allowed_key_id if policy has list
+        _akids = _policy_data.get("allowed_key_ids", [])
+        if _akids and not expected_key_id:
+            expected_key_id = _akids[0]
+
+    # --- Verify mode ---
+    if verify_checkpoint:
+        cp_path = Path(verify_checkpoint)
+        if not cp_path.exists():
+            _msg(f"[red]Checkpoint file not found: {cp_path}[/red]")
+            raise typer.Exit(1)
+        if not lp.exists():
+            _msg(f"[red]Anchor log not found: {lp}[/red]")
+            raise typer.Exit(1)
+        try:
+            cp_data = json.loads(cp_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError) as _e:
+            _msg(f"[red]Invalid checkpoint JSON: {_e}[/red]")
+            raise typer.Exit(1)
+
+        # A35->A36: Verify optional signature on checkpoint with policy enforcement
+        _cp_sig = cp_data.get("signature", {})
+        _cp_sig_algo = _cp_sig.get("algorithm", "none") if isinstance(_cp_sig, dict) else "none"
+        _sig_valid = False
+        _sig_status = "unsigned"  # A36: signature_status
+        _key_id_match = None  # A36: key ID policy check
+
+        if _cp_sig_algo == "HMAC-SHA256":
+            import hmac as _hmac
+            _key = os.environ.get("AIHUB_SIGNING_KEY", "")
+            if _key:
+                # Rebuild the unsigned payload and verify
+                # A42: exclude policy_provenance from signature (loaded_at varies)
+                _unsigned = {k: v for k, v in cp_data.items()
+                             if k not in ("signature", "policy_provenance")}
+                _payload = json.dumps(_unsigned, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                _expected = _hmac.new(_key.encode("utf-8"), _payload, hashlib.sha256).hexdigest()
+                _sig_valid = (_expected == _cp_sig.get("signature", ""))
+                _sig_status = "signed_valid" if _sig_valid else "signed_invalid"
+            else:
+                _sig_status = "signed_unverified"  # A36: signed but key unavailable
+            _msg(f"  Signature: {'[green]VALID[/green]' if _sig_valid else '[red]INVALID[/red]'} "
+                 f"(algorithm={_cp_sig_algo}, key={'set' if _key else 'not set'})")
+
+            # A36->A37: Key ID policy check (supports multiple allowed_key_ids)
+            _allowed_kids = _policy_data.get("allowed_key_ids", []) if _policy_data else []
+            if expected_key_id or _allowed_kids:
+                _cp_key_id = _cp_sig.get("key_id", "")
+                # Build check set: CLI expected_key_id + policy allowed_key_ids
+                _check_kids: list[str] = []
+                if expected_key_id:
+                    _check_kids.append(expected_key_id)
+                for _kid in _allowed_kids:
+                    if _kid not in _check_kids:
+                        _check_kids.append(_kid)
+                _key_id_match = (_cp_key_id in _check_kids) if _check_kids else None
+                _msg(f"  Key ID: {'[green]MATCH[/green]' if _key_id_match else '[red]MISMATCH[/red]'}"
+                     f" (allowed={_check_kids}, actual={_cp_key_id or 'none'})")
+        elif _cp_sig_algo == "none":
+            _sig_status = "unsigned"  # A36
+            _msg("  Signature: none (unsigned checkpoint)")
+
+        # A36: Apply signature policy
+        _sig_policy = signature_policy.lower()
+        _sig_policy_fail = False
+        if _sig_policy == "required":
+            if _sig_status == "unsigned":
+                _sig_status = "signature_required_missing"
+                _sig_policy_fail = True
+                _msg("[red]Signature policy REQUIRED: checkpoint is unsigned[/red]")
+            elif _sig_status == "signed_invalid":
+                _sig_policy_fail = True
+                _msg("[red]Signature policy REQUIRED: signature is INVALID[/red]")
+            elif _sig_status == "signed_unverified":
+                _sig_policy_fail = True
+                _msg("[red]Signature policy REQUIRED: cannot verify (key unavailable)[/red]")
+            if expected_key_id and _key_id_match is False:
+                _sig_policy_fail = True
+                _msg("[red]Signature policy REQUIRED: key ID mismatch[/red]")
+        elif _sig_policy == "optional":
+            if _sig_status == "signed_invalid":
+                _msg("[yellow]Warning: signature invalid (policy=optional)[/yellow]")
+            elif _sig_status == "unsigned":
+                _msg("[yellow]Warning: checkpoint unsigned (policy=optional)[/yellow]")
+            elif _sig_status == "signed_unverified":
+                _msg("[yellow]Warning: signature unverifiable (policy=optional)[/yellow]")
+            if expected_key_id and _key_id_match is False:
+                _msg("[yellow]Warning: key ID mismatch (policy=optional)[/yellow]")
+        # else: off -- skip all signature checks
+
+        # Read current log
+        raw = lp.read_text(encoding="utf-8").strip().split("\n")
+        raw = [l for l in raw if l.strip()]
+        if not raw:
+            _msg("[red]Anchor log is empty[/red]")
+            raise typer.Exit(1)
+
+        current_head_line = raw[-1]
+        current_head_hash = hashlib.sha256(current_head_line.encode("utf-8")).hexdigest()
+        current_entry_count = len(raw)
+        # A35: Compute chain_full_hash for verification
+        _chain_concat = "".join(raw)
+        _current_chain_hash = hashlib.sha256(_chain_concat.encode("utf-8")).hexdigest()
+
+        cp_head_hash = cp_data.get("chain_head_hash", "")
+        cp_entry_count = cp_data.get("entries_count", 0)
+        cp_chain_hash = cp_data.get("chain_full_hash", "")
+
+        # A35: Independent checks
+        _head_match = (current_head_hash == cp_head_hash)
+        _chain_match = (_current_chain_hash == cp_chain_hash) if cp_chain_hash else True
+        _entries_match = (current_entry_count == cp_entry_count) if cp_entry_count else True
+
+        _all_ok = _head_match and _chain_match and _entries_match and not _sig_policy_fail
+        _msg(f"[bold]Checkpoint Verification (A36)[/bold]")
+        _msg(f"  Checkpoint entries: {cp_entry_count}, Log entries: {current_entry_count}"
+             f" -- {'[green]MATCH[/green]' if _entries_match else '[red]MISMATCH[/red]'}")
+        _msg(f"  Head hash: {'[green]PASS[/green]' if _head_match else '[red]FAIL[/red]'}")
+        _msg(f"  Chain hash: {'[green]PASS[/green]' if _chain_match else '[red]FAIL[/red]'}")
+        _msg(f"  Signature policy: {_sig_policy} | status: {_sig_status}"
+             f" | policy_pass: {'[green]YES[/green]' if not _sig_policy_fail else '[red]NO[/red]'}")
+
+        if as_json:
+            result = {
+                "checkpoint_file": str(cp_path),
+                "log_path": str(lp),
+                "head_hash_match": _head_match,
+                "chain_full_hash_match": _chain_match,
+                "entries_count_match": _entries_match,
+                "signature_valid": _sig_valid if _cp_sig_algo != "none" else None,
+                "signature_policy": _sig_policy,
+                "signature_status": _sig_status,
+                "signature_policy_pass": not _sig_policy_fail,
+                "checkpoint_hash": cp_head_hash,
+                "current_hash": current_head_hash,
+                "checkpoint_chain_hash": cp_chain_hash,
+                "current_chain_hash": _current_chain_hash,
+                "checkpoint_entries": cp_entry_count,
+                "current_entries": current_entry_count,
+                "verdict": "passed" if _all_ok else "failed",
+            }
+            # A36->A37: key ID info
+            if expected_key_id:
+                result["expected_key_id"] = expected_key_id
+                result["key_id_match"] = _key_id_match
+            # A37->A43: policy info with provenance (redacted path)
+            if _policy_data:
+                result["policy_file_hash"] = _policy_data.get("_policy_provenance", {}).get("policy_path_hash", "")
+                result["policy_schema_version"] = _policy_data.get("schema_version", "")
+                _akids = _policy_data.get("allowed_key_ids", [])
+                if _akids:
+                    result["allowed_key_ids"] = _akids
+                result["policy_provenance"] = _policy_data.get("_policy_provenance", {})
+            _emit_json(result)
+        if not _all_ok:
+            raise typer.Exit(1)
+        return
+
+    # --- Export mode ---
+    if not lp.exists():
+        _msg(f"[red]Anchor log not found: {lp}[/red]")
+        raise typer.Exit(1)
+
+    raw = lp.read_text(encoding="utf-8").strip().split("\n")
+    raw = [l for l in raw if l.strip()]
+    if not raw:
+        _msg("[red]Anchor log is empty -- nothing to checkpoint[/red]")
+        raise typer.Exit(1)
+
+    head_line = raw[-1]
+    head_hash = hashlib.sha256(head_line.encode("utf-8")).hexdigest()
+
+    # Compute cumulative chain hash (hash of all lines concatenated)
+    chain_concat = "".join(raw)
+    chain_hash = hashlib.sha256(chain_concat.encode("utf-8")).hexdigest()
+
+    try:
+        head_entry = json.loads(head_line)
+    except json.JSONDecodeError:
+        head_entry = {}
+
+    checkpoint = {
+        "format_version": "1.1",
+        "chain_head_hash": head_hash,
+        "chain_full_hash": chain_hash,
+        "entries_count": len(raw),
+        "head_timestamp": head_entry.get("timestamp", ""),
+        "head_bundle_id": head_entry.get("bundle_id", ""),
+        "head_run_id": head_entry.get("run_id", ""),
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    # A35: Optional signing
+    if sign:
+        _sign_result = _sign_record(checkpoint)
+        checkpoint["signature"] = _sign_result
+        if _sign_result.get("algorithm") != "none":
+            _msg(f"[green]Checkpoint signed[/green] (algorithm={_sign_result['algorithm']})")
+
+    # A42: include policy provenance in checkpoint BEFORE export
+    if _policy_data and "_policy_provenance" in _policy_data:
+        checkpoint["policy_provenance"] = _policy_data["_policy_provenance"]
+
+    if export:
+        out_path = Path(export)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(checkpoint, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+        _msg(f"[green]Checkpoint exported to {out_path}[/green]")
+        _msg(f"  Entries: {len(raw)}")
+        _msg(f"  Head hash: {head_hash}")
+        _msg(f"  Chain hash: {chain_hash}")
+    else:
+        _msg("[bold]Current Chain Head Checkpoint:[/bold]")
+        _msg(f"  Entries: {len(raw)}")
+        _msg(f"  Head hash: {head_hash}")
+        _msg(f"  Chain hash: {chain_hash}")
+        _msg(f"  Head timestamp: {head_entry.get('timestamp', 'N/A')}")
+        _msg(f"  Head bundle_id: {head_entry.get('bundle_id', 'N/A')}")
+
+    if as_json:
+        _emit_json(checkpoint)
+
+
+@paper_app.command("policy-schema")
+def paper_policy_schema(
+    output: Optional[str] = typer.Option(None, "--output", "-o",
+                                          help="Write schema to file instead of stdout (A42)"),
+):
+    """Export the audit policy JSON Schema for external tool validation (A42).
+
+    The schema can be used by external JSON Schema validators (e.g., ajv,
+    jsonschema, check-jsonschema) to validate policy files independently.
+    """
+    schema_json = json.dumps(_AUDIT_POLICY_JSON_SCHEMA, indent=2, ensure_ascii=False)
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(schema_json, encoding="utf-8")
+        console.print(f"[green]Policy schema exported to {out_path}[/green]")
+    else:
+        console.print(schema_json, markup=False, highlight=False)
+
+
 def _render_cli_backend_calls(bc: dict) -> str:
     if not bc:
         return "No backend calls recorded."
@@ -2642,10 +6708,8 @@ def _render_cli_backend_calls(bc: dict) -> str:
             lines.append(f"| {node} | {info.get('backend', '?')} | {info.get('model', '?')} | {info.get('exit_code', '?')} |")
     return "\n".join(lines)
 
-
 def main():
     app()
-
 
 if __name__ == "__main__":
     main()

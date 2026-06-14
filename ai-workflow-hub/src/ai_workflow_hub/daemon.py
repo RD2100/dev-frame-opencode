@@ -22,7 +22,8 @@ def _daemon_log(msg: str) -> None:
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     log_file = log_dir / f"daemon-{today}.log"
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    log_file.open("a", encoding="utf-8").write(f"[{ts}] {msg}\n")
+    with log_file.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {msg}\n")
 
 
 def _daemon_config() -> dict[str, Any]:
@@ -82,6 +83,10 @@ def mark_stale_running_tasks() -> int:
                 blocked_reason=f"stale running: exceeded {stale_min} min limit",
             )
             _daemon_log(f"STALE {t['id']}: running since {updated}, marked failed")
+            # A22: structured audit for stale recovery
+            from .audit import audit_log as _audit
+            _audit("daemon.stale_recovery", result="FAILED", allowed=True,
+                   task_id=t["id"], reason=f"exceeded {stale_min} min limit")
             count += 1
     return count
 
@@ -127,6 +132,11 @@ def run_queued_tasks(project_id: str | None = None) -> dict[str, Any]:
             continue
 
         _daemon_log(f"START {t['id']} project={t['project_id']}")
+        # A22: structured audit for task start
+        from .audit import audit_log as _audit
+        _audit("daemon.task_start", result="STARTED", allowed=True,
+               task_id=t["id"], project_id=t["project_id"],
+               run_id=run_id, workflow_type=t.get("workflow_type", "coding"))
         started += 1
         started_ids.append(t["id"])
 
@@ -137,20 +147,30 @@ def run_queued_tasks(project_id: str | None = None) -> dict[str, Any]:
             # 确保异常任务不被卡在 running 状态
             mark_task_finished(t["id"], "failed",
                                blocked_reason=f"execution error: {e}")
+            # A22: structured audit for task failure
+            from .audit import audit_log as _audit
+            _audit("daemon.task_error", result="FAILED", allowed=False,
+                   task_id=t["id"], project_id=t["project_id"],
+                   reason=str(e)[:200])
 
     return {"started": started, "started_ids": started_ids}
 
 
 def _execute_one_task(task: dict[str, Any]) -> None:
-    """同步执行一个 task。调用现有的 run start 逻辑."""
-    from .cli import _execute_run
-    project_id = task["project_id"]
-    task_id = task["id"]
-    backend = task.get("coding_backend", "")
-    # 默认 apply，不 run-tests（测试命令已在 workflow 中执行）
-    _execute_run(project_id=project_id, task_id=task_id,
-                 apply_changes=True, run_tests=False,
-                 coding_backend=backend)
+    """同步执行一个 task。根据 workflow_type 路由到对应运行时 (A16)."""
+    workflow_type = task.get("workflow_type", "coding")
+
+    if workflow_type == "paper":
+        from .context_layer.adapters.paper_runtime import dispatch_paper_task
+        dispatch_paper_task(task)
+    else:
+        from .cli import _execute_run
+        project_id = task["project_id"]
+        task_id = task["id"]
+        backend = task.get("coding_backend", "")
+        _execute_run(project_id=project_id, task_id=task_id,
+                     apply_changes=True, run_tests=False,
+                     coding_backend=backend)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +238,9 @@ def daemon_loop(project_id: str | None = None, once: bool = False) -> int:
     """主循环."""
     if not _acquire_lock():
         _daemon_log("DAEMON ABORT: another instance is running")
+        from .audit import audit_log as _audit_abort
+        _audit_abort("daemon.start", result="BLOCKED", allowed=False,
+                     reason="another_instance_running")
         return 1
 
     _write_pidfile()
@@ -241,13 +264,17 @@ def daemon_loop(project_id: str | None = None, once: bool = False) -> int:
 
             if once:
                 _daemon_log(f"DAEMON DONE (once): started {total_started}")
+                audit_log("daemon.stop", result="COMPLETED", allowed=True,
+                          reason="once_mode")
                 _cleanup_lock()
                 return 0
 
-            _daemon_log(f"CYCLE: stale={stale}, started={started}")
+            _daemon_log(f"CYCLE: stale={stale}, started={rqt['started']}")
             time.sleep(poll_interval)
     except KeyboardInterrupt:
         _daemon_log(f"DAEMON STOP (interrupt): total started {total_started}")
+        audit_log("daemon.stop", result="INTERRUPTED", allowed=True,
+                  reason="keyboard_interrupt")
     finally:
         _cleanup_lock()
     return 0
